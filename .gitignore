@@ -1,3 +1,4 @@
 .idea/
 __pycache__/
 venv/
+gubkin_schedule_bot/subscribers.json

@@ -14,14 +14,17 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import io
+import json
 import logging
 import os
+import pathlib
 import threading
 from zoneinfo import ZoneInfo
 
 from telegram import InputFile, Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
+import my_commands as my
 from gubkin_api import CaptchaRequired, GubkinClient, GubkinError
 from schedule import fetch_range, semester_bounds, to_csv, to_ics, to_json, to_text
 
@@ -29,6 +32,8 @@ MSK = ZoneInfo("Europe/Moscow")
 GROUP_CODE = os.environ.get("GROUP_CODE", "ГМ-26-11")
 FACULTY_HINT = os.environ.get("FACULTY_HINT", "геолог")
 TG_LIMIT = 4000
+MORNING = dt.time(7, 0, tzinfo=MSK)  # время утренней рассылки
+SUBSCRIBERS_FILE = pathlib.Path(os.environ.get("SUBSCRIBERS_FILE", "subscribers.json"))
 
 log = logging.getLogger("gubkin-bot")
 client = GubkinClient()
@@ -43,7 +48,10 @@ HELP = (
     "/next — следующая неделя\n"
     "/date ДД.ММ.ГГГГ — на конкретный день\n"
     "/all — выгрузить ВСЁ расписание семестра файлами (JSON, CSV для Excel, ICS для календаря, TXT)\n"
-    "/captcha — если сайт попросил капчу"
+    "/subscribe — присылать расписание каждое утро в 7:00\n"
+    "/unsubscribe — отписаться от рассылки\n"
+    "/captcha — если сайт попросил капчу\n\n"
+    "Команды из заданий (my_commands.py): /about /count /lectures /labs /first /stats /free"
 )
 
 
@@ -167,6 +175,123 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         "Капча принята ✅ Повторите команду." if ok else "Неверно. Отправьте /captcha ещё раз.")
 
 
+# ---- утренняя рассылка
+
+def _load_subscribers() -> set[int]:
+    try:
+        return set(json.loads(SUBSCRIBERS_FILE.read_text(encoding="utf-8")))
+    except (OSError, ValueError):
+        return set()
+
+
+def _save_subscribers(ids: set[int]) -> None:
+    SUBSCRIBERS_FILE.write_text(json.dumps(sorted(ids)), encoding="utf-8")
+
+
+async def cmd_subscribe(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    ids = _load_subscribers()
+    ids.add(update.effective_chat.id)
+    _save_subscribers(ids)
+    await update.effective_message.reply_text(
+        f"Готово! Каждое утро в {MORNING:%H:%M} пришлю расписание на день (если есть пары). "
+        "Отписаться — /unsubscribe")
+
+
+async def cmd_unsubscribe(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    ids = _load_subscribers()
+    ids.discard(update.effective_chat.id)
+    _save_subscribers(ids)
+    await update.effective_message.reply_text("Вы отписались от утренней рассылки.")
+
+
+async def morning_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    ids = _load_subscribers()
+    if not ids:
+        return
+    d = _today()
+    try:
+        lessons = await asyncio.to_thread(_fetch, d, d)
+    except (GubkinError, OSError):
+        log.exception("morning fetch failed")
+        return
+    if not lessons:  # в выходной не беспокоим
+        return
+    text = "Доброе утро! ☀️ Сегодня:\n\n" + to_text(lessons)
+    for chat_id in ids:
+        try:
+            await ctx.bot.send_message(chat_id, text[:TG_LIMIT])
+        except Exception:  # пользователь заблокировал бота и т. п.
+            log.warning("cannot send to %s", chat_id)
+
+
+# ---- команды из заданий (my_commands.py)
+
+NOT_DONE = "🛠 Эта команда ещё не готова — допишите функцию {} в файле my_commands.py"
+
+
+async def _reply_my(update: Update, result, func_name: str) -> None:
+    if result is None:
+        await update.effective_message.reply_text(NOT_DONE.format(func_name))
+    elif isinstance(result, list):
+        await _send_text(update, "\n".join(map(str, result)) or "Пусто")
+    else:
+        await _send_text(update, str(result) or "Пусто")
+
+
+def _week_bounds() -> tuple[dt.date, dt.date]:
+    mon = _today() - dt.timedelta(days=_today().weekday())
+    return mon, mon + dt.timedelta(days=6)
+
+
+async def cmd_about(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    await _reply_my(update, my.about_text(), "about_text")
+
+
+async def cmd_count(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    lessons = await _run(update, *_week_bounds())
+    if lessons is not None:
+        await _reply_my(update, my.count_text(lessons), "count_text")
+
+
+async def _cmd_kind(update: Update, kind: str) -> None:
+    lessons = await _run(update, *_week_bounds())
+    if lessons is None:
+        return
+    result = my.only_kind(lessons, kind)
+    if result is None:
+        await _reply_my(update, None, "only_kind")
+    else:
+        await _send_text(update, to_text(result, f"На этой неделе нет пар типа «{kind}»"))
+
+
+async def cmd_lectures(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    await _cmd_kind(update, "Лекция")
+
+
+async def cmd_labs(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    await _cmd_kind(update, "Лабораторная")
+
+
+async def cmd_first(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    d = _today() + dt.timedelta(days=1)
+    lessons = await _run(update, d, d)
+    if lessons is not None:
+        await _reply_my(update, my.first_lesson_text(lessons), "first_lesson_text")
+
+
+async def cmd_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.effective_message.reply_text("Считаю по всему семестру, подождите около минуты…")
+    lessons = await _run(update, *semester_bounds(_today()))
+    if lessons is not None:
+        await _reply_my(update, my.stats_text(lessons), "stats_text")
+
+
+async def cmd_free(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    lessons = await _run(update, *_week_bounds())
+    if lessons is not None:
+        await _reply_my(update, my.free_days(lessons), "free_days")
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     token = os.environ.get("BOT_TOKEN")
@@ -181,6 +306,17 @@ def main() -> None:
     app.add_handler(CommandHandler("date", cmd_date))
     app.add_handler(CommandHandler("all", cmd_all))
     app.add_handler(CommandHandler("captcha", cmd_captcha))
+    app.add_handler(CommandHandler("subscribe", cmd_subscribe))
+    app.add_handler(CommandHandler("unsubscribe", cmd_unsubscribe))
+    # команды из заданий — чтобы добавить свою, допишите строку по образцу
+    app.add_handler(CommandHandler("about", cmd_about))
+    app.add_handler(CommandHandler("count", cmd_count))
+    app.add_handler(CommandHandler("lectures", cmd_lectures))
+    app.add_handler(CommandHandler("labs", cmd_labs))
+    app.add_handler(CommandHandler("first", cmd_first))
+    app.add_handler(CommandHandler("stats", cmd_stats))
+    app.add_handler(CommandHandler("free", cmd_free))
+    app.job_queue.run_daily(morning_job, time=MORNING)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
     app.run_polling()
 
