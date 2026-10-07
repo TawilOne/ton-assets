@@ -7,6 +7,9 @@
     GROUP_CODE    — код группы (по умолчанию ГМ-26-11)
     GROUP_ID      — id группы на сайте, если известен (иначе найдётся по коду)
     FACULTY_HINT  — подстрока названия факультета для поиска (по умолчанию «геолог»)
+    TG_PROXY      — прокси только для Telegram, если api.telegram.org недоступен
+                    (например socks5://127.0.0.1:1080 или http://host:port).
+                    Сайт Губкина при этом открывается напрямую.
 """
 
 from __future__ import annotations
@@ -297,7 +300,14 @@ def main() -> None:
     token = os.environ.get("BOT_TOKEN")
     if not token:
         raise SystemExit("Укажите токен бота: BOT_TOKEN=... python bot.py")
-    app = Application.builder().token(token).build()
+    proxy = os.environ.get("TG_PROXY")
+    builder = (Application.builder().token(token)
+               .connect_timeout(30).read_timeout(30).write_timeout(30)
+               .get_updates_connect_timeout(30).get_updates_read_timeout(30))
+    if proxy:
+        builder = builder.proxy(proxy).get_updates_proxy(proxy)
+        log.info("Telegram via proxy %s", proxy.split("@")[-1])
+    app = builder.build()
     app.add_handler(CommandHandler(["start", "help"], cmd_start))
     app.add_handler(CommandHandler("today", cmd_today))
     app.add_handler(CommandHandler("tomorrow", cmd_tomorrow))
