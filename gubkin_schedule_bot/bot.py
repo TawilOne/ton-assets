@@ -22,6 +22,7 @@ import logging
 import os
 import pathlib
 import threading
+import time
 from zoneinfo import ZoneInfo
 
 from telegram import InputFile, Update
@@ -80,6 +81,11 @@ def _ensure_group() -> None:
         pass
 
 
+def _locked(func, *args):
+    with _lock:
+        return func(*args)
+
+
 def _fetch(start: dt.date, end: dt.date):
     with _lock:
         _ensure_group()
@@ -88,7 +94,14 @@ def _fetch(start: dt.date, end: dt.date):
 
 async def _run(update: Update, start: dt.date, end: dt.date):
     try:
-        return await asyncio.to_thread(_fetch, start, end)
+        await update.effective_chat.send_action("typing")  # «печатает…», пока грузим с сайта
+    except Exception:
+        pass
+    t0 = time.monotonic()
+    try:
+        lessons = await asyncio.to_thread(_fetch, start, end)
+        log.info("schedule %s..%s loaded in %.1f s", start, end, time.monotonic() - t0)
+        return lessons
     except CaptchaRequired:
         await update.effective_message.reply_text("Сайт попросил капчу. Отправьте /captcha и введите код с картинки.")
     except (GubkinError, OSError) as e:
@@ -171,7 +184,7 @@ async def cmd_all(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def cmd_captcha(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     try:
-        img = await asyncio.to_thread(client.captcha_image)
+        img = await asyncio.to_thread(_locked, client.captcha_image)
     except (GubkinError, OSError) as e:
         await update.effective_message.reply_text(f"Не удалось загрузить капчу: {e}")
         return
@@ -184,7 +197,7 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await update.effective_message.reply_text(HELP)
         return
     try:
-        ok = await asyncio.to_thread(client.validate_captcha, update.effective_message.text)
+        ok = await asyncio.to_thread(_locked, client.validate_captcha, update.effective_message.text)
     except (GubkinError, OSError) as e:
         await update.effective_message.reply_text(str(e))
         return
@@ -317,7 +330,9 @@ def main() -> None:
     proxy = os.environ.get("TG_PROXY")
     builder = (Application.builder().token(token)
                .connect_timeout(30).read_timeout(30).write_timeout(30)
-               .get_updates_connect_timeout(30).get_updates_read_timeout(30))
+               .get_updates_connect_timeout(30).get_updates_read_timeout(30)
+               # команды обрабатываются параллельно: /start не ждёт, пока грузится чужой /today
+               .concurrent_updates(True))
     if proxy:
         builder = builder.proxy(proxy).get_updates_proxy(proxy)
         log.info("Telegram via proxy %s", proxy.split("@")[-1])
@@ -342,7 +357,9 @@ def main() -> None:
     app.add_handler(CommandHandler("free", cmd_free))
     app.job_queue.run_daily(morning_job, time=MORNING)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
-    app.run_polling()
+    # старые сообщения, отправленные, пока бот был выключен, пропускаем —
+    # иначе при запуске он долго отвечает на каждое из них
+    app.run_polling(drop_pending_updates=True)
 
 
 if __name__ == "__main__":
