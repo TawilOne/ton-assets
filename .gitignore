@@ -2,3 +2,5 @@
 __pycache__/
 venv/
 gubkin_schedule_bot/subscribers.json
+gubkin_schedule_bot/cookies.json
+gubkin_schedule_bot/group.json

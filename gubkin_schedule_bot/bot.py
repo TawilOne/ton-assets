@@ -39,7 +39,9 @@ MORNING = dt.time(7, 0, tzinfo=MSK)  # время утренней рассыл�
 SUBSCRIBERS_FILE = pathlib.Path(os.environ.get("SUBSCRIBERS_FILE", "subscribers.json"))
 
 log = logging.getLogger("gubkin-bot")
-client = GubkinClient()
+DATA_DIR = pathlib.Path(__file__).resolve().parent
+client = GubkinClient(cookie_file=str(DATA_DIR / "cookies.json"))
+GROUP_FILE = DATA_DIR / "group.json"
 _lock = threading.Lock()  # одна сессия сайта на всех — запросы по очереди
 _group: dict = {"id": os.environ.get("GROUP_ID"), "code": GROUP_CODE, "faculty": ""}
 
@@ -61,9 +63,21 @@ HELP = (
 def _ensure_group() -> None:
     if _group["id"]:
         return
+    try:  # найденная группа запоминается в файл — не ищем её на сайте при каждом запуске
+        saved = json.loads(GROUP_FILE.read_text(encoding="utf-8"))
+        if saved.get("code_wanted") == GROUP_CODE and saved.get("id"):
+            _group.update(id=saved["id"], code=saved["code"], faculty=saved.get("faculty", ""))
+            return
+    except (OSError, ValueError):
+        pass
     f, g = client.find_group(GROUP_CODE, FACULTY_HINT)
     _group.update(id=g["id"], code=g.get("code") or GROUP_CODE, faculty=f.get("name", ""))
     log.info("group %s id=%s faculty=%s", _group["code"], _group["id"], _group["faculty"])
+    try:
+        GROUP_FILE.write_text(json.dumps({**_group, "code_wanted": GROUP_CODE}, ensure_ascii=False),
+                              encoding="utf-8")
+    except OSError:
+        pass
 
 
 def _fetch(start: dt.date, end: dt.date):

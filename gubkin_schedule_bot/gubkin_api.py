@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import pathlib
 import time
 
 import requests
@@ -40,15 +41,40 @@ class CaptchaRequired(GubkinError):
 
 
 class GubkinClient:
-    def __init__(self, timeout: float = 40, delay: float = 0.5):
+    def __init__(self, timeout: float = 40, delay: float = 0.5,
+                 cookie_file: str | None = None, cache_ttl: float = 30 * 60):
         self.timeout = timeout
         self.delay = delay  # пауза между запросами, чтобы не злить WAF
+        self.cache_ttl = cache_ttl  # сколько секунд помнить скачанную неделю
+        self._cache: dict[tuple, tuple[float, dict]] = {}
         self.s = requests.Session()
         self.s.headers.update({
             "User-Agent": UA,
             "Accept": "application/json, text/plain, */*",
             "Referer": BASE + "schedule/",
         })
+        # cookie сохраняются в файл: пройденная капча и сессия переживают перезапуск
+        self.cookie_file = pathlib.Path(cookie_file) if cookie_file else None
+        self._load_cookies()
+
+    def _load_cookies(self) -> None:
+        if not self.cookie_file:
+            return
+        try:
+            for c in json.loads(self.cookie_file.read_text(encoding="utf-8")):
+                self.s.cookies.set(c["name"], c["value"], domain=c.get("domain", ""), path=c.get("path", "/"))
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+
+    def _save_cookies(self) -> None:
+        if not self.cookie_file:
+            return
+        data = [{"name": c.name, "value": c.value, "domain": c.domain, "path": c.path}
+                for c in self.s.cookies]
+        try:
+            self.cookie_file.write_text(json.dumps(data), encoding="utf-8")
+        except OSError:
+            pass
 
     # ---- сессия
 
@@ -56,6 +82,7 @@ class GubkinClient:
         if not force and self.s.cookies.get("PHPSESSID"):
             return
         self.s.get(BASE + "schedule/", headers={"Accept": "text/html,*/*"}, timeout=self.timeout)
+        self._save_cookies()
 
     def _get(self, params: dict) -> dict:
         self._visit()
@@ -63,6 +90,7 @@ class GubkinClient:
             if self.delay:
                 time.sleep(self.delay)
             r = self.s.get(API, params=params, timeout=self.timeout)
+            self._save_cookies()
             if r.status_code == 429:
                 raise CaptchaRequired("Сайт просит капчу")
             body = r.text.lstrip()
@@ -99,6 +127,7 @@ class GubkinClient:
     def validate_captcha(self, code: str) -> bool:
         r = self.s.post(API, params={"act": "Captcha", "method": "validateCaptcha"},
                         json={"key": code.strip()}, timeout=self.timeout)
+        self._save_cookies()
         if r.status_code == 429:
             raise GubkinError("Сайт просит подождать минуту — попробуйте позже")
         try:
@@ -117,9 +146,17 @@ class GubkinClient:
                           "facultyId": faculty_id}).get("rows") or []
 
     def week(self, day: dt.date, group_id) -> dict:
-        """Сырой ответ за неделю, содержащую day."""
-        return self._get({"act": "schedule", "date": f"{day.day}-{day.month}-{day.year}",
+        """Сырой ответ за неделю, содержащую day. Неделя кэшируется на cache_ttl секунд,
+        чтобы повторные /today не дёргали сайт (частые запросы вызывают капчу)."""
+        monday = day - dt.timedelta(days=day.weekday())
+        key = (monday, str(group_id))
+        hit = self._cache.get(key)
+        if hit and time.monotonic() - hit[0] < self.cache_ttl:
+            return hit[1]
+        data = self._get({"act": "schedule", "date": f"{day.day}-{day.month}-{day.year}",
                           "groupId": group_id})
+        self._cache[key] = (time.monotonic(), data)
+        return data
 
     def find_group(self, code: str, faculty_hint: str = "геолог") -> tuple[dict, dict]:
         """Ищет группу по коду. Сначала на факультетах, чьё имя содержит faculty_hint,

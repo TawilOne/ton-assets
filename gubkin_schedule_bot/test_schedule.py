@@ -96,3 +96,24 @@ def test_fetch_range_and_find_group(monkeypatch):
     ls = fetch_range(c, 777, "ГМ-26-11", dt.date(2026, 10, 6), dt.date(2026, 10, 18))
     assert [p["date"] for p in calls] == ["5-10-2026", "12-10-2026"]
     assert [l.date for l in ls] == ["2026-10-06", "2026-10-06"]  # 05.10 вне диапазона
+
+
+def test_week_cache(monkeypatch):
+    calls = []
+    monkeypatch.setattr(GubkinClient, "_get", lambda self, p: calls.append(p) or WEEK)
+    c = GubkinClient(delay=0)
+    c.week(dt.date(2026, 10, 6), 777)
+    c.week(dt.date(2026, 10, 8), 777)  # та же неделя — из кэша
+    assert len(calls) == 1
+    c.cache_ttl = 0
+    c.week(dt.date(2026, 10, 8), 777)
+    assert len(calls) == 2
+
+
+def test_cookies_survive_restart(tmp_path):
+    f = tmp_path / "cookies.json"
+    c = GubkinClient(cookie_file=str(f))
+    c.s.cookies.set("PHPSESSID", "abc", domain="lk.gubkin.ru", path="/")
+    c._save_cookies()
+    c2 = GubkinClient(cookie_file=str(f))
+    assert c2.s.cookies.get("PHPSESSID") == "abc"
