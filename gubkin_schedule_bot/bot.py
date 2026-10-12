@@ -41,7 +41,7 @@ SUBSCRIBERS_FILE = pathlib.Path(os.environ.get("SUBSCRIBERS_FILE", "subscribers.
 
 log = logging.getLogger("gubkin-bot")
 DATA_DIR = pathlib.Path(__file__).resolve().parent
-client = GubkinClient(cookie_file=str(DATA_DIR / "cookies.json"))
+client = GubkinClient(cookie_file=str(DATA_DIR / "cookies.json"), cache_file=str(DATA_DIR / "cache.json"))
 GROUP_FILE = DATA_DIR / "group.json"
 USERS_FILE = DATA_DIR / "users.json"  # кто пользуется ботом (видно только администратору)
 _users_lock = threading.Lock()
@@ -96,7 +96,9 @@ def _locked(func, *args):
 def _fetch(start: dt.date, end: dt.date):
     with _lock:
         _ensure_group()
-        return fetch_range(client, _group["id"], _group["code"], start, end)
+        client.stale = False
+        lessons = fetch_range(client, _group["id"], _group["code"], start, end)
+        return lessons, client.stale
 
 
 async def _run(update: Update, start: dt.date, end: dt.date):
@@ -106,14 +108,24 @@ async def _run(update: Update, start: dt.date, end: dt.date):
         pass
     t0 = time.monotonic()
     try:
-        lessons = await asyncio.to_thread(_fetch, start, end)
-        log.info("schedule %s..%s loaded in %.1f s", start, end, time.monotonic() - t0)
+        lessons, stale = await asyncio.to_thread(_fetch, start, end)
+        log.info("schedule %s..%s loaded in %.1f s%s", start, end, time.monotonic() - t0,
+                 " (из сохранённого, сайт не ответил)" if stale else "")
+        if stale:
+            await update.effective_message.reply_text(
+                "⚠️ Сайт Губкина сейчас не отвечает — показываю последнее сохранённое расписание.")
         return lessons
     except CaptchaRequired:
         await update.effective_message.reply_text("Сайт попросил капчу. Отправьте /captcha и введите код с картинки.")
     except (GubkinError, OSError) as e:
         log.exception("fetch failed")
-        await update.effective_message.reply_text(f"Не удалось получить расписание: {e}")
+        if "timed out" in str(e).lower() or "connect" in str(e).lower():
+            msg = ("⏳ Сайт Губкина не отвечает.\n\n"
+                   "Если на компьютере с ботом включён VPN — сайт может не открываться через него. "
+                   "Попробуйте позже или настройте VPN так, чтобы российские сайты шли напрямую.")
+        else:
+            msg = f"Не удалось получить расписание: {e}"
+        await update.effective_message.reply_text(msg)
     return None
 
 
@@ -272,7 +284,7 @@ async def morning_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     d = _today()
     try:
-        lessons = await asyncio.to_thread(_fetch, d, d)
+        lessons, _ = await asyncio.to_thread(_fetch, d, d)
     except (GubkinError, OSError):
         log.exception("morning fetch failed")
         return

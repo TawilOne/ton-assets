@@ -42,11 +42,16 @@ class CaptchaRequired(GubkinError):
 
 class GubkinClient:
     def __init__(self, timeout: float = 20, delay: float = 0.5,
-                 cookie_file: str | None = None, cache_ttl: float = 30 * 60):
+                 cookie_file: str | None = None, cache_ttl: float = 30 * 60,
+                 cache_file: str | None = None):
         self.timeout = timeout
+        self.stale = False  # True, если последний ответ взят из сохранённого кэша
         self.delay = delay  # пауза между запросами, чтобы не злить WAF
         self.cache_ttl = cache_ttl  # сколько секунд помнить скачанную неделю
         self._cache: dict[tuple, tuple[float, dict]] = {}
+        # кэш сохраняется на диск: если сайт не отвечает, можно показать последнее расписание
+        self.cache_file = pathlib.Path(cache_file) if cache_file else None
+        self._load_cache()
         self.s = requests.Session()
         self.s.headers.update({
             "User-Agent": UA,
@@ -56,6 +61,25 @@ class GubkinClient:
         # cookie сохраняются в файл: пройденная капча и сессия переживают перезапуск
         self.cookie_file = pathlib.Path(cookie_file) if cookie_file else None
         self._load_cookies()
+
+    def _load_cache(self) -> None:
+        if not self.cache_file:
+            return
+        try:
+            for k, (ts, data) in json.loads(self.cache_file.read_text(encoding="utf-8")).items():
+                monday, group = k.split("|", 1)
+                self._cache[(dt.date.fromisoformat(monday), group)] = (ts, data)
+        except (OSError, ValueError, TypeError):
+            pass
+
+    def _save_cache(self) -> None:
+        if not self.cache_file:
+            return
+        data = {f"{m.isoformat()}|{g}": v for (m, g), v in self._cache.items()}
+        try:
+            self.cache_file.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        except OSError:
+            pass
 
     def _load_cookies(self) -> None:
         if not self.cookie_file:
@@ -154,11 +178,20 @@ class GubkinClient:
         this_monday = dt.date.today() - dt.timedelta(days=dt.date.today().weekday())
         # прошедшие недели уже не меняются — их можно помнить дольше (для /stats и /all)
         ttl = self.cache_ttl if monday >= this_monday else max(self.cache_ttl, 6 * 3600)
-        if hit and time.monotonic() - hit[0] < ttl:
+        if hit and time.time() - hit[0] < ttl:
             return hit[1]
-        data = self._get({"act": "schedule", "date": f"{day.day}-{day.month}-{day.year}",
-                          "groupId": group_id})
-        self._cache[key] = (time.monotonic(), data)
+        try:
+            data = self._get({"act": "schedule", "date": f"{day.day}-{day.month}-{day.year}",
+                              "groupId": group_id})
+        except CaptchaRequired:
+            raise
+        except (GubkinError, OSError, ValueError):
+            if hit:  # сайт не отвечает — отдаём последнее сохранённое расписание
+                self.stale = True
+                return hit[1]
+            raise
+        self._cache[key] = (time.time(), data)
+        self._save_cache()
         return data
 
     def find_group(self, code: str, faculty_hint: str = "геолог") -> tuple[dict, dict]:

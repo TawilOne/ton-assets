@@ -151,3 +151,20 @@ def test_html_view():
     assert "Геология &lt;b&gt;&amp;" in h          # спецсимволы экранированы
     for line in h.split("\n"):                     # теги не переходят через перенос строки
         assert len(re.findall(r"<(\w+)>", line)) == len(re.findall(r"</(\w+)>", line)), line
+
+
+def test_stale_cache_when_site_down(monkeypatch, tmp_path):
+    from gubkin_api import GubkinError
+    mon = dt.date.today() - dt.timedelta(days=dt.date.today().weekday())
+    f = tmp_path / "cache.json"
+    monkeypatch.setattr(GubkinClient, "_get", lambda self, p: WEEK)
+    GubkinClient(delay=0, cache_file=str(f)).week(mon, 777)   # сохранили на диск
+
+    def down(self, p):
+        raise GubkinError("Read timed out")
+    monkeypatch.setattr(GubkinClient, "_get", down)
+    c = GubkinClient(delay=0, cache_file=str(f), cache_ttl=0)  # «перезапуск», сайт лежит
+    assert c.week(mon, 777) == WEEK and c.stale
+    import pytest
+    with pytest.raises(GubkinError):                           # без кэша — честная ошибка
+        GubkinClient(delay=0).week(mon, 777)
