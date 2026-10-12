@@ -344,12 +344,25 @@ async def cmd_free(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await _reply_my(update, my.free_days(lessons), "free_days")
 
 
+def _read_setting(name: str) -> str | None:
+    """Первая непустая строка файла рядом с bot.py (например token.txt), или None."""
+    try:
+        for line in (DATA_DIR / name).read_text(encoding="utf-8-sig").splitlines():
+            if line.strip():
+                return line.strip()
+    except OSError:
+        pass
+    return None
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    token = os.environ.get("BOT_TOKEN")
+    # токен и прокси можно задать переменной окружения или файлом рядом с bot.py
+    token = os.environ.get("BOT_TOKEN") or _read_setting("token.txt")
     if not token:
-        raise SystemExit("Укажите токен бота: BOT_TOKEN=... python bot.py")
-    proxy = os.environ.get("TG_PROXY")
+        raise SystemExit("Нет токена бота. Создайте рядом с bot.py файл token.txt и вставьте в него "
+                         "токен от @BotFather (или задайте переменную BOT_TOKEN).")
+    proxy = os.environ.get("TG_PROXY") or _read_setting("proxy.txt")
     builder = (Application.builder().token(token)
                .connect_timeout(30).read_timeout(30).write_timeout(30)
                .get_updates_connect_timeout(30).get_updates_read_timeout(30)
