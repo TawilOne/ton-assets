@@ -26,7 +26,7 @@ import time
 from zoneinfo import ZoneInfo
 
 from telegram import InputFile, KeyboardButton, ReplyKeyboardMarkup, Update
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, TypeHandler, filters
 
 import my_commands as my
 from gubkin_api import CaptchaRequired, GubkinClient, GubkinError
@@ -43,6 +43,8 @@ log = logging.getLogger("gubkin-bot")
 DATA_DIR = pathlib.Path(__file__).resolve().parent
 client = GubkinClient(cookie_file=str(DATA_DIR / "cookies.json"))
 GROUP_FILE = DATA_DIR / "group.json"
+USERS_FILE = DATA_DIR / "users.json"  # кто пользуется ботом (видно только администратору)
+_users_lock = threading.Lock()
 _lock = threading.Lock()  # одна сессия сайта на всех — запросы по очереди
 _group: dict = {"id": os.environ.get("GROUP_ID"), "code": GROUP_CODE, "faculty": ""}
 
@@ -366,6 +368,93 @@ async def cmd_free(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await _reply_my(update, my.free_days(lessons), "free_days")
 
 
+# ---- статистика пользователей (только для администратора)
+
+def _admin_id() -> int | None:
+    """id администратора: переменная ADMIN_ID или файл admin.txt рядом с bot.py."""
+    raw = os.environ.get("ADMIN_ID") or _read_setting("admin.txt")
+    try:
+        return int(raw) if raw else None
+    except ValueError:
+        return None
+
+
+def _load_users() -> dict:
+    try:
+        return json.loads(USERS_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _user_label(u: dict) -> str:
+    name = _esc_html(u.get("name") or "без имени")
+    return name + (f" (@{_esc_html(u['username'])})" if u.get("username") else "")
+
+
+def _esc_html(s: str) -> str:
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+async def track_user(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Запоминает каждого, кто пишет боту. О новых людях сообщает администратору."""
+    user = update.effective_user
+    if user is None or user.is_bot:
+        return
+    now = dt.datetime.now(MSK).strftime("%Y-%m-%d %H:%M")
+    text = update.effective_message.text if update.effective_message else ""
+    with _users_lock:
+        users = _load_users()
+        key = str(user.id)
+        is_new = key not in users
+        u = users.setdefault(key, {"first": now, "count": 0})
+        u.update(name=user.full_name, username=user.username or "", last=now,
+                 count=u.get("count", 0) + 1, last_text=(text or "")[:40])
+        try:
+            USERS_FILE.write_text(json.dumps(users, ensure_ascii=False, indent=1), encoding="utf-8")
+        except OSError:
+            log.warning("cannot save users.json")
+    admin = _admin_id()
+    if is_new and admin and user.id != admin:
+        try:
+            await ctx.bot.send_message(admin, f"🆕 Новый пользователь: {_user_label(u)}\nid: <code>{user.id}</code>",
+                                       parse_mode="HTML")
+        except Exception:
+            log.warning("cannot notify admin")
+
+
+async def cmd_myid(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.effective_message.reply_text(
+        f"Ваш id: <code>{update.effective_user.id}</code>", parse_mode="HTML")
+
+
+async def cmd_users(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    admin = _admin_id()
+    if admin is None:
+        await update.effective_message.reply_text(
+            "Администратор не настроен. Узнайте свой id командой /myid и сохраните его "
+            "в файл admin.txt рядом с bot.py, потом перезапустите бота.")
+        return
+    if update.effective_user.id != admin:
+        await update.effective_message.reply_text("Эта команда только для администратора.")
+        return
+    users = _load_users()
+    if not users:
+        await update.effective_message.reply_text("Пока никто не пользовался ботом.")
+        return
+    today = dt.datetime.now(MSK).strftime("%Y-%m-%d")
+    active = sum(1 for u in users.values() if u.get("last", "").startswith(today))
+    lines = [f"👥 <b>Пользователей: {len(users)}</b> · сегодня активны: {active}", ""]
+    for uid, u in sorted(users.items(), key=lambda kv: kv[1].get("last", ""), reverse=True)[:50]:
+        last = u.get("last", "")
+        last = f"{last[8:10]}.{last[5:7]} {last[11:]}" if len(last) >= 16 else last
+        lines.append(f"• {_user_label(u)}\n   запросов: {u.get('count', 0)} · последний: {last}"
+                     f" · id <code>{uid}</code>")
+    if len(users) > 50:
+        lines.append(f"\n…и ещё {len(users) - 50}")
+    for part in _split("\n".join(lines)):
+        await update.effective_message.reply_text(part, parse_mode="HTML")
+
+
 def _read_setting(name: str) -> str | None:
     """Первая непустая строка файла рядом с bot.py (например token.txt), или None."""
     try:
@@ -394,7 +483,11 @@ def main() -> None:
         builder = builder.proxy(proxy).get_updates_proxy(proxy)
         log.info("Telegram via proxy %s", proxy.split("@")[-1])
     app = builder.build()
+    # group=-1: срабатывает раньше остальных обработчиков на каждое сообщение
+    app.add_handler(TypeHandler(Update, track_user), group=-1)
     app.add_handler(CommandHandler(["start", "help"], cmd_start))
+    app.add_handler(CommandHandler("myid", cmd_myid))
+    app.add_handler(CommandHandler("users", cmd_users))
     app.add_handler(CommandHandler("today", cmd_today))
     app.add_handler(CommandHandler("tomorrow", cmd_tomorrow))
     app.add_handler(CommandHandler("week", cmd_week))
