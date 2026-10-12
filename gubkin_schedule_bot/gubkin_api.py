@@ -41,10 +41,10 @@ class CaptchaRequired(GubkinError):
 
 
 class GubkinClient:
-    def __init__(self, timeout: float = 20, delay: float = 0.5,
+    def __init__(self, timeout: float | tuple = (10, 40), delay: float = 0.5,
                  cookie_file: str | None = None, cache_ttl: float = 30 * 60,
                  cache_file: str | None = None):
-        self.timeout = timeout
+        self.timeout = timeout  # (подключение, ожидание ответа) в секундах
         self.stale = False  # True, если последний ответ взят из сохранённого кэша
         self.delay = delay  # пауза между запросами, чтобы не злить WAF
         self.cache_ttl = cache_ttl  # сколько секунд помнить скачанную неделю
