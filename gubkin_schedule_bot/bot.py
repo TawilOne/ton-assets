@@ -145,7 +145,6 @@ async def _show(update: Update, start: dt.date, end: dt.date, empty: str) -> Non
 BUTTONS = [
     [("📅 Сегодня", "cmd_today"), ("➡️ Завтра", "cmd_tomorrow")],
     [("🗓 Неделя", "cmd_week"), ("⏭ След. неделя", "cmd_next")],
-    [("⏰ Первая пара завтра", "cmd_first"), ("🆓 Свободные дни", "cmd_free")],
 ]
 KEYBOARD = ReplyKeyboardMarkup([[KeyboardButton(text) for text, _ in row] for row in BUTTONS],
                                resize_keyboard=True)
