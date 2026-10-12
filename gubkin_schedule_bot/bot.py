@@ -394,7 +394,9 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
     # старые сообщения, отправленные, пока бот был выключен, пропускаем —
     # иначе при запуске он долго отвечает на каждое из них
-    app.run_polling(drop_pending_updates=True)
+    # если Telegram пока недоступен (VPN ещё не включён), не падаем, а пробуем снова
+    log.info("Подключаюсь к Telegram... Если долго висит — проверьте VPN/прокси.")
+    app.run_polling(drop_pending_updates=True, bootstrap_retries=-1)
 
 
 if __name__ == "__main__":
