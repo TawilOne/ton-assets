@@ -102,12 +102,16 @@ def test_week_cache(monkeypatch):
     calls = []
     monkeypatch.setattr(GubkinClient, "_get", lambda self, p: calls.append(p) or WEEK)
     c = GubkinClient(delay=0)
-    c.week(dt.date(2026, 10, 6), 777)
-    c.week(dt.date(2026, 10, 8), 777)  # та же неделя — из кэша
+    mon = dt.date.today() - dt.timedelta(days=dt.date.today().weekday())
+    c.week(mon, 777)
+    c.week(mon + dt.timedelta(days=2), 777)  # та же неделя — из кэша
     assert len(calls) == 1
-    c.cache_ttl = 0
-    c.week(dt.date(2026, 10, 8), 777)
+    c.cache_ttl = 0                          # текущая неделя устарела — качаем заново
+    c.week(mon + dt.timedelta(days=2), 777)
     assert len(calls) == 2
+    c.week(mon - dt.timedelta(days=7), 777)  # прошлая неделя
+    c.week(mon - dt.timedelta(days=7), 777)  # ...помнится дольше, даже при cache_ttl=0
+    assert len(calls) == 3
 
 
 def test_cookies_survive_restart(tmp_path):
@@ -133,3 +137,17 @@ def test_breaks_in_text():
     same = [Lesson(start="08:45", end="10:15", subject="А", subgroup=1, **day),
             Lesson(start="08:45", end="10:15", subject="Б", subgroup=2, **day)]
     assert "перемена" not in to_text(same)
+
+
+def test_html_view():
+    import re
+    from schedule import Lesson, short_name, to_html
+    assert short_name("Петров Пётр Петрович, Иванов Иван") == "Петров П. П., Иванов И."
+    day = dict(date="2026-10-12", weekday="Понедельник", week_type="верхняя")
+    ls = [Lesson(start="08:45", end="10:15", subject="Геология <b>&", kind="Лекция", **day),
+          Lesson(start="10:30", end="12:00", subject="Минералогия", kind="Лабораторная", **day)]
+    h = to_html(ls, today=dt.date(2026, 10, 12))
+    assert "сегодня" in h and "☕ перемена 15 мин" in h and "🔬" in h
+    assert "Геология &lt;b&gt;&amp;" in h          # спецсимволы экранированы
+    for line in h.split("\n"):                     # теги не переходят через перенос строки
+        assert len(re.findall(r"<(\w+)>", line)) == len(re.findall(r"</(\w+)>", line)), line

@@ -30,7 +30,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandl
 
 import my_commands as my
 from gubkin_api import CaptchaRequired, GubkinClient, GubkinError
-from schedule import fetch_range, semester_bounds, to_csv, to_ics, to_json, to_text
+from schedule import fetch_range, semester_bounds, to_csv, to_html, to_ics, to_json, to_text
 
 MSK = ZoneInfo("Europe/Moscow")
 GROUP_CODE = os.environ.get("GROUP_CODE", "ГМ-26-11")
@@ -115,11 +115,20 @@ async def _run(update: Update, start: dt.date, end: dt.date):
     return None
 
 
-async def _send_text(update: Update, text: str) -> None:
-    while text:  # Telegram ограничивает длину сообщения
+def _split(text: str) -> list[str]:
+    """Режет длинный текст по переносам строк (Telegram ограничивает длину сообщения)."""
+    parts = []
+    while text:
         cut = len(text) if len(text) <= TG_LIMIT else text.rfind("\n", 0, TG_LIMIT) + 1 or TG_LIMIT
-        await update.effective_message.reply_text(text[:cut])
+        parts.append(text[:cut])
         text = text[cut:]
+    return parts
+
+
+async def _send_text(update: Update, text: str, html: bool = False) -> None:
+    for part in _split(text):
+        await update.effective_message.reply_text(part, parse_mode="HTML" if html else None,
+                                                  reply_markup=KEYBOARD)
 
 
 def _today() -> dt.date:
@@ -129,7 +138,7 @@ def _today() -> dt.date:
 async def _show(update: Update, start: dt.date, end: dt.date, empty: str) -> None:
     lessons = await _run(update, start, end)
     if lessons is not None:
-        await _send_text(update, to_text(lessons, empty))
+        await _send_text(update, to_html(lessons, empty, today=_today()), html=True)
 
 
 # Кнопки внизу чата: текст кнопки -> имя функции-команды
@@ -268,12 +277,25 @@ async def morning_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     if not lessons:  # в выходной не беспокоим
         return
-    text = "Доброе утро! ☀️ Сегодня:\n\n" + to_text(lessons)
+    text = "Доброе утро! ☀️ Расписание на сегодня:\n\n" + to_html(lessons, today=d)
     for chat_id in ids:
         try:
-            await ctx.bot.send_message(chat_id, text[:TG_LIMIT])
+            for part in _split(text):
+                await ctx.bot.send_message(chat_id, part, parse_mode="HTML")
         except Exception:  # пользователь заблокировал бота и т. п.
             log.warning("cannot send to %s", chat_id)
+
+
+async def prefetch_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Заранее подгружает текущую и следующую неделю в кэш — тогда /today, /week и кнопки
+    отвечают мгновенно, без ожидания сайта."""
+    mon = _today() - dt.timedelta(days=_today().weekday())
+    try:
+        await asyncio.to_thread(_fetch, mon, mon + dt.timedelta(days=13))
+    except CaptchaRequired:
+        log.warning("prefetch: сайт просит капчу — отправьте боту /captcha")
+    except (GubkinError, OSError) as e:
+        log.warning("prefetch failed: %s", e)
 
 
 # ---- команды из заданий (my_commands.py)
@@ -313,7 +335,8 @@ async def _cmd_kind(update: Update, kind: str) -> None:
     if result is None:
         await _reply_my(update, None, "only_kind")
     else:
-        await _send_text(update, to_text(result, f"На этой неделе нет пар типа «{kind}»"))
+        await _send_text(update, to_html(result, f"На этой неделе нет пар типа «{kind}»", today=_today()),
+                         html=True)
 
 
 async def cmd_lectures(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -391,6 +414,8 @@ def main() -> None:
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler("free", cmd_free))
     app.job_queue.run_daily(morning_job, time=MORNING)
+    # подгрузка расписания при старте и каждые 20 минут (кэш живёт 30 минут)
+    app.job_queue.run_repeating(prefetch_job, interval=20 * 60, first=5)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
     # старые сообщения, отправленные, пока бот был выключен, пропускаем —
     # иначе при запуске он долго отвечает на каждое из них

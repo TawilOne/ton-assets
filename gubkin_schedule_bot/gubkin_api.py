@@ -151,7 +151,10 @@ class GubkinClient:
         monday = day - dt.timedelta(days=day.weekday())
         key = (monday, str(group_id))
         hit = self._cache.get(key)
-        if hit and time.monotonic() - hit[0] < self.cache_ttl:
+        this_monday = dt.date.today() - dt.timedelta(days=dt.date.today().weekday())
+        # прошедшие недели уже не меняются — их можно помнить дольше (для /stats и /all)
+        ttl = self.cache_ttl if monday >= this_monday else max(self.cache_ttl, 6 * 3600)
+        if hit and time.monotonic() - hit[0] < ttl:
             return hit[1]
         data = self._get({"act": "schedule", "date": f"{day.day}-{day.month}-{day.year}",
                           "groupId": group_id})

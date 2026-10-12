@@ -291,3 +291,95 @@ def break_text(gap: int) -> str:
     h, m = divmod(gap, 60)
     length = f"{h} ч {m} мин" if h and m else (f"{h} ч" if h else f"{m} мин")
     return f"  🕐 окно {length}"
+
+
+# ---- красивый вид для чата Telegram (HTML-разметка)
+
+MONTHS = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля",
+          "августа", "сентября", "октября", "ноября", "декабря"]
+
+KIND_ICONS = [  # (часть названия типа занятия, значок)
+    ("лекц", "📖"), ("семин", "✍️"), ("практ", "✍️"), ("лаб", "🔬"),
+    ("экзам", "📝"), ("зач", "✅"), ("консул", "💬"),
+]
+
+
+def _esc(s: str) -> str:
+    return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def kind_icon(kind: str) -> str:
+    k = (kind or "").lower()
+    for part, icon in KIND_ICONS:
+        if part in k:
+            return icon
+    return "📌"
+
+
+def short_name(full: str) -> str:
+    """'Петров Пётр Петрович' -> 'Петров П. П.' (несколько имён через запятую тоже)."""
+    out = []
+    for person in (full or "").split(","):
+        parts = person.split()
+        if len(parts) >= 2:
+            out.append(parts[0] + " " + " ".join(p[0] + "." for p in parts[1:]))
+        elif parts:
+            out.append(parts[0])
+    return ", ".join(out)
+
+
+def day_title(date_iso: str, weekday: str, week_type: str = "", today: dt.date | None = None) -> str:
+    d = dt.date.fromisoformat(date_iso)
+    title = f"📅 <b>{weekday}, {d.day} {MONTHS[d.month - 1]}</b>"
+    if today and d == today:
+        title += " · сегодня"
+    elif today and d == today + dt.timedelta(days=1):
+        title += " · завтра"
+    if week_type:
+        title += f"\n<i>{_esc(week_type)} неделя</i>"
+    return title
+
+
+def format_lesson_html(l: Lesson) -> str:
+    time = f"<b>{l.start}–{l.end}</b>" if l.end else f"<b>{l.start}</b>"
+    subject = f"<b>{_esc(l.subject)}</b>"
+    if l.cancelled:
+        lines = [f"❌ <s>{l.start}–{l.end}  {_esc(l.subject)}</s>", "<i>пара отменена</i>"]
+    else:
+        lines = [f"🕘 {time}", f"{kind_icon(l.kind)} {subject}"]
+        info = []
+        if l.kind:
+            info.append(_esc(l.kind))
+        if l.subgroup:
+            info.append(f"{l.subgroup} подгруппа")
+        if l.room:
+            info.append(f"ауд. <b>{_esc(l.room)}</b>")
+        if info:
+            lines.append("      " + " · ".join(info))
+        if l.teacher:
+            lines.append(f"      👤 {_esc(short_name(l.teacher))}")
+    for n in l.notes:
+        lines.append(f"      ⚠️ <i>{_esc(n)}</i>")
+    return "\n".join(lines)
+
+
+def to_html(lessons: list[Lesson], empty: str = "Занятий нет", today: dt.date | None = None) -> str:
+    """Расписание для чата: заголовок дня, пары блоками, перемены между ними.
+    Каждая строка — законченный HTML (теги не переходят на следующую строку),
+    поэтому длинный текст можно резать по переносам строк."""
+    if not lessons:
+        return _esc(empty)
+    out, cur, prev_end = [], None, None
+    for l in lessons:
+        if l.date != cur:
+            if cur is not None:
+                out += ["", "━━━━━━━━━━━━━━", ""]
+            cur, prev_end = l.date, None
+            out += [day_title(l.date, l.weekday, l.week_type, today), ""]
+        else:
+            gap = _minutes(l.start) - prev_end if prev_end is not None and not l.cancelled else 0
+            out += ["", f"<i>{break_text(gap).strip()}</i>", ""] if gap > 0 else [""]
+        out.append(format_lesson_html(l))
+        if not l.cancelled and l.end:
+            prev_end = max(prev_end or 0, _minutes(l.end))
+    return "\n".join(out).strip()
