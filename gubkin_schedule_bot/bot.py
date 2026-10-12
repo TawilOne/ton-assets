@@ -25,7 +25,7 @@ import threading
 import time
 from zoneinfo import ZoneInfo
 
-from telegram import InputFile, Update
+from telegram import InputFile, KeyboardButton, ReplyKeyboardMarkup, Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 import my_commands as my
@@ -132,8 +132,18 @@ async def _show(update: Update, start: dt.date, end: dt.date, empty: str) -> Non
         await _send_text(update, to_text(lessons, empty))
 
 
+# Кнопки внизу чата: текст кнопки -> имя функции-команды
+BUTTONS = [
+    [("📅 Сегодня", "cmd_today"), ("➡️ Завтра", "cmd_tomorrow")],
+    [("🗓 Неделя", "cmd_week"), ("⏭ След. неделя", "cmd_next")],
+    [("⏰ Первая пара завтра", "cmd_first"), ("🆓 Свободные дни", "cmd_free")],
+]
+KEYBOARD = ReplyKeyboardMarkup([[KeyboardButton(text) for text, _ in row] for row in BUTTONS],
+                               resize_keyboard=True)
+
+
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.effective_message.reply_text(HELP)
+    await update.effective_message.reply_text(HELP, reply_markup=KEYBOARD)
 
 
 async def cmd_today(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -198,8 +208,15 @@ async def cmd_captcha(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    text = (update.effective_message.text or "").strip()
+    for row in BUTTONS:  # нажата кнопка — выполняем соответствующую команду
+        for label, func_name in row:
+            if text == label:
+                ctx.user_data.pop("captcha", None)
+                await globals()[func_name](update, ctx)
+                return
     if not ctx.user_data.pop("captcha", False):
-        await update.effective_message.reply_text(HELP)
+        await update.effective_message.reply_text(HELP, reply_markup=KEYBOARD)
         return
     try:
         ok = await asyncio.to_thread(_locked, client.validate_captcha, update.effective_message.text)

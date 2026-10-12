@@ -117,3 +117,19 @@ def test_cookies_survive_restart(tmp_path):
     c._save_cookies()
     c2 = GubkinClient(cookie_file=str(f))
     assert c2.s.cookies.get("PHPSESSID") == "abc"
+
+
+def test_breaks_in_text():
+    from schedule import Lesson, break_text
+    day = dict(date="2026-10-05", weekday="Понедельник")
+    ls = [Lesson(start="08:45", end="10:15", subject="А", **day),
+          Lesson(start="10:30", end="12:00", subject="Б", **day),
+          Lesson(start="14:00", end="15:30", subject="В", **day)]
+    t = to_text(ls)
+    assert "☕ перемена 15 мин" in t
+    assert "🕐 окно 2 ч" in t
+    assert break_text(90) == "  🕐 окно 1 ч 30 мин"
+    # подгруппы в одно время — перемены нет
+    same = [Lesson(start="08:45", end="10:15", subject="А", subgroup=1, **day),
+            Lesson(start="08:45", end="10:15", subject="Б", subgroup=2, **day)]
+    assert "перемена" not in to_text(same)

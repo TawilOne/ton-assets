@@ -261,12 +261,33 @@ def format_lesson(l: Lesson) -> str:
 def to_text(lessons: list[Lesson], empty: str = "Занятий нет") -> str:
     if not lessons:
         return empty
-    out, cur = [], None
+    out, cur, prev_end = [], None, None
     for l in lessons:
         if l.date != cur:
-            cur = l.date
+            cur, prev_end = l.date, None
             d = dt.date.fromisoformat(l.date)
             wt = f" ({l.week_type} неделя)" if l.week_type else ""
             out.append(f"\n📅 {l.weekday}, {d.strftime('%d.%m.%Y')}{wt}")
+        elif prev_end is not None and not l.cancelled:
+            gap = _minutes(l.start) - prev_end
+            if gap > 0:
+                out.append(break_text(gap))
         out.append(format_lesson(l))
+        if not l.cancelled and l.end:
+            prev_end = max(prev_end or 0, _minutes(l.end))
     return "\n".join(out).strip()
+
+
+def _minutes(hhmm: str) -> int:
+    """'10:30' -> 630 (минут от полуночи)."""
+    h, m = hhmm.split(":")
+    return int(h) * 60 + int(m)
+
+
+def break_text(gap: int) -> str:
+    """Строка о перерыве между парами: короткий — перемена, длинный — «окно»."""
+    if gap <= 40:
+        return f"  ☕ перемена {gap} мин"
+    h, m = divmod(gap, 60)
+    length = f"{h} ч {m} мин" if h and m else (f"{h} ч" if h else f"{m} мин")
+    return f"  🕐 окно {length}"
