@@ -64,10 +64,16 @@ install -m 644 "$DIR/deploy/gubkin-proxy.service" "$DIR/deploy/gubkin-bot.servic
 systemctl daemon-reload
 systemctl enable -q gubkin-proxy gubkin-bot
 systemctl restart gubkin-proxy
-sleep 3
-code=$(curl -s -o /dev/null -w '%{http_code}' -x http://127.0.0.1:1080 --max-time 15 https://api.telegram.org || true)
+code=000
+for i in 1 2 3 4 5 6; do   # прокси нужно несколько секунд, чтобы проверить серверы подписки
+  sleep 5
+  code=$(curl -s -o /dev/null -w '%{http_code}' -x http://127.0.0.1:1080 --max-time 15 https://api.telegram.org || true)
+  [ "$code" != "000" ] && break
+done
 if [ "$code" = "000" ]; then
-  echo "⚠️  Через VPN-ключ Telegram не открывается. Проверьте ключ: rm /etc/gubkin-bot/sing-box.json и запустите установку снова."
+  echo "⚠️  Через VPN-ключ Telegram не открывается. Журнал прокси:"
+  journalctl -u gubkin-proxy -n 15 --no-pager || true
+  echo "Ввести ключ заново: rm /etc/gubkin-bot/sing-box.json и запустите установку снова."
 else
   echo "Telegram через прокси доступен (код $code)."
 fi

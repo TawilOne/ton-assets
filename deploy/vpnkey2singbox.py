@@ -51,7 +51,9 @@ def transport_block(q: dict) -> dict | None:
         return t
     if net in ("httpupgrade",):
         return {"type": "httpupgrade", "path": q.get("path") or "/", "host": q.get("host", "")}
-    return None  # tcp
+    if net in ("tcp", "raw", "none", ""):
+        return None
+    raise ValueError(f"транспорт {net} не поддерживается sing-box")
 
 
 def parse(link: str) -> dict:
@@ -112,33 +114,59 @@ def parse(link: str) -> dict:
     raise ValueError(f"неизвестный тип ключа: {scheme}://")
 
 
-def links_from(arg: str) -> list[str]:
-    if arg.startswith(("http://", "https://")):     # ссылка-подписка: список ключей (часто в base64)
-        req = urllib.request.Request(arg, headers={"User-Agent": "sing-box"})
-        text = urllib.request.urlopen(req, timeout=30).read().decode("utf-8", "replace").strip()
-        if "://" not in text:
-            text = b64decode(text)
-        return [line.strip() for line in text.splitlines() if "://" in line]
-    return [arg]
+SUPPORTED = {"vless", "vmess", "trojan", "shadowsocks", "hysteria2", "tuic"}
+
+
+def links_from(arg: str) -> list:
+    """Ключи из аргумента: одна ссылка или подписка (список ссылок, base64 или готовый конфиг sing-box)."""
+    if not arg.startswith(("http://", "https://")):
+        return [arg]
+    # «v2rayNG» — чтобы панель отдала обычный список ключей, а не конфиг под конкретное приложение
+    req = urllib.request.Request(arg, headers={"User-Agent": "v2rayNG/1.8.19"})
+    text = urllib.request.urlopen(req, timeout=30).read().decode("utf-8", "replace").strip()
+    if text.startswith("{"):                        # подписка сразу в формате sing-box
+        return [o for o in json.loads(text).get("outbounds", []) if o.get("type") in SUPPORTED]
+    if "://" not in text:
+        text = b64decode(text)
+    return [line.strip() for line in text.splitlines() if "://" in line]
+
+
+def usable(o: dict) -> bool:
+    """Отсекаем «информационные» записи подписки (0.0.0.0, порт 1 и т.п.) и транспорты, которых нет в sing-box."""
+    if o.get("server") in (None, "", "0.0.0.0", "127.0.0.1", "localhost") or int(o.get("server_port") or 0) < 2:
+        return False
+    return (o.get("transport") or {}).get("type") not in ("xhttp", "splithttp")  # для готовых конфигов
 
 
 def main():
     if len(sys.argv) != 2:
         sys.exit(__doc__)
-    errors = []
+    outbounds, errors, seen = [], [], set()
     for link in links_from(sys.argv[1]):
         try:
-            outbound = parse(link)
-            break
-        except Exception as e:  # пробуем следующий ключ из подписки
-            errors.append(f"{link[:30]}…: {e}")
-    else:
+            o = dict(link) if isinstance(link, dict) else parse(link)
+        except Exception as e:
+            errors.append(f"{str(link)[:30]}…: {e}")
+            continue
+        o.pop("tag", None)
+        key = json.dumps(o, sort_keys=True)
+        if usable(o) and key not in seen:
+            seen.add(key)
+            outbounds.append(o)
+    if not outbounds:
         sys.exit("Не удалось разобрать ключ:\n" + "\n".join(errors))
-    outbound["tag"] = "proxy"
+    for i, o in enumerate(outbounds):
+        o["tag"] = f"key{i + 1}"
+    tags = [o["tag"] for o in outbounds]
+    # urltest сам проверяет все серверы подписки и ходит через тот, что отвечает быстрее
+    group = {"type": "urltest", "tag": "proxy", "outbounds": tags,
+             "url": "https://api.telegram.org", "interval": "3m", "tolerance": 100}
+    print(f"Серверов в конфиге: {len(outbounds)}", file=sys.stderr)
     config = {
         "log": {"level": "warn"},
         "inbounds": [{"type": "mixed", "tag": "in", "listen": "127.0.0.1", "listen_port": LISTEN_PORT}],
-        "outbounds": [outbound, {"type": "direct", "tag": "direct"}],
+        "outbounds": [group, *outbounds, {"type": "direct", "tag": "direct"}],
+        "route": {"final": "proxy"},
     }
     print(json.dumps(config, ensure_ascii=False, indent=2))
 
