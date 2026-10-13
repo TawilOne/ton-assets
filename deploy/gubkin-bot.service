@@ -8,6 +8,8 @@ User=gubkin
 WorkingDirectory=/opt/gubkin-bot/gubkin_schedule_bot
 # Telegram — через локальный прокси (VPN-ключ), сайт Губкина — напрямую
 Environment=TG_PROXY=http://127.0.0.1:1080
+# если сайт Губкина не пускает напрямую — бот пойдёт к нему через тот же прокси
+Environment=GUBKIN_PROXY=http://127.0.0.1:1080
 Environment=PYTHONUNBUFFERED=1
 ExecStart=/opt/gubkin-bot/venv/bin/python bot.py
 Restart=always

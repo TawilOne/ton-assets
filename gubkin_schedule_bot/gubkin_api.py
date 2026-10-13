@@ -43,7 +43,10 @@ class CaptchaRequired(GubkinError):
 class GubkinClient:
     def __init__(self, timeout: float | tuple = (10, 40), delay: float = 0.5,
                  cookie_file: str | None = None, cache_ttl: float = 30 * 60,
-                 cache_file: str | None = None):
+                 cache_file: str | None = None, fallback_proxy: str | None = None):
+        # если сайт не отвечает напрямую — запасной путь через этот прокси (на час, потом снова напрямую)
+        self.fallback_proxy = fallback_proxy
+        self._proxy_until = 0.0
         self.timeout = timeout  # (подключение, ожидание ответа) в секундах
         self.stale = False  # True, если последний ответ взят из сохранённого кэша
         self.delay = delay  # пауза между запросами, чтобы не злить WAF
@@ -102,10 +105,23 @@ class GubkinClient:
 
     # ---- сессия
 
+    def _req(self, method: str, url: str, **kw) -> requests.Response:
+        kw.setdefault("timeout", self.timeout)
+        if self.s.proxies and time.time() > self._proxy_until:
+            self.s.proxies.clear()  # час прошёл — пробуем снова напрямую
+        try:
+            return self.s.request(method, url, **kw)
+        except requests.ConnectionError:
+            if not self.fallback_proxy or self.s.proxies:
+                raise
+            self.s.proxies.update({"http": self.fallback_proxy, "https": self.fallback_proxy})
+            self._proxy_until = time.time() + 3600
+            return self.s.request(method, url, **kw)
+
     def _visit(self, force: bool = False) -> None:
         if not force and self.s.cookies.get("PHPSESSID"):
             return
-        self.s.get(BASE + "schedule/", headers={"Accept": "text/html,*/*"}, timeout=self.timeout)
+        self._req("GET", BASE + "schedule/", headers={"Accept": "text/html,*/*"})
         self._save_cookies()
 
     def _get(self, params: dict) -> dict:
@@ -113,7 +129,7 @@ class GubkinClient:
         for attempt in range(2):
             if self.delay:
                 time.sleep(self.delay)
-            r = self.s.get(API, params=params, timeout=self.timeout)
+            r = self._req("GET", API, params=params)
             self._save_cookies()
             if r.status_code == 429:
                 raise CaptchaRequired("Сайт просит капчу")
@@ -142,14 +158,14 @@ class GubkinClient:
 
     def captcha_image(self) -> bytes:
         self._visit()
-        r = self.s.get(API, params={"act": "Captcha", "method": "generateCaptcha"},
+        r = self._req("GET", API, params={"act": "Captcha", "method": "generateCaptcha"},
                        headers={"Accept": "image/*,*/*"}, timeout=self.timeout)
         if not r.ok:
             raise GubkinError(f"Не удалось загрузить капчу ({r.status_code})")
         return r.content
 
     def validate_captcha(self, code: str) -> bool:
-        r = self.s.post(API, params={"act": "Captcha", "method": "validateCaptcha"},
+        r = self._req("POST", API, params={"act": "Captcha", "method": "validateCaptcha"},
                         json={"key": code.strip()}, timeout=self.timeout)
         self._save_cookies()
         if r.status_code == 429:

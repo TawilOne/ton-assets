@@ -44,7 +44,8 @@ SUBSCRIBERS_FILE = pathlib.Path(os.environ.get("SUBSCRIBERS_FILE", "subscribers.
 
 log = logging.getLogger("gubkin-bot")
 DATA_DIR = pathlib.Path(__file__).resolve().parent
-client = GubkinClient(cookie_file=str(DATA_DIR / "cookies.json"), cache_file=str(DATA_DIR / "cache.json"))
+client = GubkinClient(cookie_file=str(DATA_DIR / "cookies.json"), cache_file=str(DATA_DIR / "cache.json"),
+                      fallback_proxy=os.environ.get("GUBKIN_PROXY"))  # запасной путь к сайту, если напрямую не пускает
 GROUP_FILE = DATA_DIR / "group.json"
 USERS_FILE = DATA_DIR / "users.json"  # кто пользуется ботом (видно только администратору)
 _users_lock = threading.Lock()
@@ -551,6 +552,8 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     for h in logging.getLogger().handlers:
         h.addFilter(_ShortNetworkErrors())
+    # httpx пишет каждый запрос вместе с адресом, а в адресе — токен бота; такие строки не нужны
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     # токен и прокси можно задать переменной окружения или файлом рядом с bot.py
     token = os.environ.get("BOT_TOKEN") or _read_setting("token.txt")
     if not token:
