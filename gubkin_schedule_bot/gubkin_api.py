@@ -43,7 +43,8 @@ class CaptchaRequired(GubkinError):
 class GubkinClient:
     def __init__(self, timeout: float | tuple = (10, 40), delay: float = 0.5,
                  cookie_file: str | None = None, cache_ttl: float = 30 * 60,
-                 cache_file: str | None = None, fallback_proxy: str | None = None):
+                 cache_file: str | None = None, fallback_proxy: str | None = None,
+                 proxy: str | None = None):
         # если сайт не отвечает напрямую — запасной путь через этот прокси (на час, потом снова напрямую)
         self.fallback_proxy = fallback_proxy
         self._proxy_until = 0.0
@@ -64,6 +65,9 @@ class GubkinClient:
         # cookie сохраняются в файл: пройденная капча и сессия переживают перезапуск
         self.cookie_file = pathlib.Path(cookie_file) if cookie_file else None
         self._load_cookies()
+        self.proxy = proxy  # всегда ходить на сайт через этот прокси
+        if proxy:
+            self.s.proxies.update({"http": proxy, "https": proxy})
 
     def _load_cache(self) -> None:
         if not self.cache_file:
@@ -107,7 +111,7 @@ class GubkinClient:
 
     def _req(self, method: str, url: str, **kw) -> requests.Response:
         kw.setdefault("timeout", self.timeout)
-        if self.s.proxies and time.time() > self._proxy_until:
+        if not self.proxy and self.s.proxies and time.time() > self._proxy_until:
             self.s.proxies.clear()  # час прошёл — пробуем снова напрямую
         try:
             return self.s.request(method, url, **kw)

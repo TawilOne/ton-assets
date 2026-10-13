@@ -161,12 +161,15 @@ def main():
     # urltest сам проверяет все серверы подписки и ходит через тот, что отвечает быстрее
     group = {"type": "urltest", "tag": "proxy", "outbounds": tags,
              "url": "https://api.telegram.org", "interval": "3m", "tolerance": 100}
+    # сайт Губкина не пускает серверы хостингов — ищем среди ключей подписки тот, через который он открывается
+    gubkin = {"type": "urltest", "tag": "gubkin", "outbounds": ["direct", *tags],
+              "url": "https://lk.gubkin.ru/schedule/", "interval": "10m", "tolerance": 300}
     print(f"Серверов в конфиге: {len(outbounds)}", file=sys.stderr)
     config = {
         "log": {"level": "warn"},
         "inbounds": [{"type": "mixed", "tag": "in", "listen": "127.0.0.1", "listen_port": LISTEN_PORT}],
-        "outbounds": [group, *outbounds, {"type": "direct", "tag": "direct"}],
-        "route": {"final": "proxy"},
+        "outbounds": [group, gubkin, *outbounds, {"type": "direct", "tag": "direct"}],
+        "route": {"rules": [{"domain_suffix": ["gubkin.ru"], "outbound": "gubkin"}], "final": "proxy"},
     }
     print(json.dumps(config, ensure_ascii=False, indent=2))
 

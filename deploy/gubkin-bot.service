@@ -6,10 +6,10 @@ Wants=network-online.target gubkin-proxy.service
 [Service]
 User=gubkin
 WorkingDirectory=/opt/gubkin-bot/gubkin_schedule_bot
-# Telegram — через локальный прокси (VPN-ключ), сайт Губкина — напрямую
+# всё через локальный прокси (sing-box): Telegram — через VPN-ключ, а сайт Губкина —
+# через тот путь (напрямую или один из ключей подписки), где он открывается: хостинги он не пускает
 Environment=TG_PROXY=http://127.0.0.1:1080
-# если сайт Губкина не пускает напрямую — бот пойдёт к нему через тот же прокси
-Environment=GUBKIN_PROXY=http://127.0.0.1:1080
+Environment=GUBKIN_PROXY_ALWAYS=http://127.0.0.1:1080
 Environment=PYTHONUNBUFFERED=1
 ExecStart=/opt/gubkin-bot/venv/bin/python bot.py
 Restart=always

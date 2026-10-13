@@ -45,7 +45,8 @@ SUBSCRIBERS_FILE = pathlib.Path(os.environ.get("SUBSCRIBERS_FILE", "subscribers.
 log = logging.getLogger("gubkin-bot")
 DATA_DIR = pathlib.Path(__file__).resolve().parent
 client = GubkinClient(cookie_file=str(DATA_DIR / "cookies.json"), cache_file=str(DATA_DIR / "cache.json"),
-                      fallback_proxy=os.environ.get("GUBKIN_PROXY"))  # запасной путь к сайту, если напрямую не пускает
+                      fallback_proxy=os.environ.get("GUBKIN_PROXY"),  # запасной путь к сайту, если напрямую не пускает
+                      proxy=os.environ.get("GUBKIN_PROXY_ALWAYS"))  # на сервере: всегда через прокси
 GROUP_FILE = DATA_DIR / "group.json"
 USERS_FILE = DATA_DIR / "users.json"  # кто пользуется ботом (видно только администратору)
 _users_lock = threading.Lock()

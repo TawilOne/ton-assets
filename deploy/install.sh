@@ -53,6 +53,7 @@ while [ ! -s /etc/gubkin-bot/sing-box.json ]; do
   K=$(ask "VPN-ключ или ссылка-подписка (vless://..., vmess://..., ss://..., https://...): "); echo
   if python3 "$DIR/deploy/vpnkey2singbox.py" "$K" > /tmp/sb.json && /usr/local/bin/sing-box check -c /tmp/sb.json; then
     install -m 644 /tmp/sb.json /etc/gubkin-bot/sing-box.json
+    (umask 077; printf '%s' "$K" > /etc/gubkin-bot/vpnkey)   # чтобы update.sh мог пересобрать конфиг
   else
     echo "Ключ не подошёл — проверьте, что скопировали его целиком, и попробуйте ещё раз."
   fi
