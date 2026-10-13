@@ -49,9 +49,12 @@ if ! /usr/local/bin/sing-box version 2>/dev/null | grep -q "$SB_VER"; then
   install -m 755 "/tmp/sing-box-$SB_VER-linux-$ARCH/sing-box" /usr/local/bin/sing-box
 fi
 mkdir -p /etc/gubkin-bot
+if [ -s /etc/gubkin-bot/sing-box.json ]; then
+  bash "$DIR/deploy/reproxy.sh"   # ключ уже сохранён — просто заново проверяем серверы подписки
+fi
 while [ ! -s /etc/gubkin-bot/sing-box.json ]; do
   K=$(ask "VPN-ключ или ссылка-подписка (vless://..., vmess://..., ss://..., https://...): "); echo
-  if python3 "$DIR/deploy/vpnkey2singbox.py" "$K" > /tmp/sb.json && /usr/local/bin/sing-box check -c /tmp/sb.json; then
+  if python3 "$DIR/deploy/vpnkey2singbox.py" --probe "$K" > /tmp/sb.json && /usr/local/bin/sing-box check -c /tmp/sb.json; then
     install -m 644 /tmp/sb.json /etc/gubkin-bot/sing-box.json
     (umask 077; printf '%s' "$K" > /etc/gubkin-bot/vpnkey)   # чтобы update.sh мог пересобрать конфиг
   else
@@ -61,9 +64,10 @@ while [ ! -s /etc/gubkin-bot/sing-box.json ]; do
 done
 
 say "Запускаю службы"
-install -m 644 "$DIR/deploy/gubkin-proxy.service" "$DIR/deploy/gubkin-bot.service" /etc/systemd/system/
+install -m 644 "$DIR"/deploy/gubkin-{proxy,bot,reproxy}.service "$DIR/deploy/gubkin-reproxy.timer" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable -q gubkin-proxy gubkin-bot
+systemctl enable -q --now gubkin-reproxy.timer
 systemctl restart gubkin-proxy
 code=000
 for i in 1 2 3 4 5 6; do   # прокси нужно несколько секунд, чтобы проверить серверы подписки

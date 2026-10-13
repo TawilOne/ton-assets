@@ -3,14 +3,21 @@
 (https://...) в конфиг sing-box: локальный прокси 127.0.0.1:1080, через который бот ходит в Telegram.
 
     python3 vpnkey2singbox.py 'vless://...'  > /etc/gubkin-bot/sing-box.json
+    python3 vpnkey2singbox.py --probe 'https://...'   # на сервере: проверить каждый сервер подписки
 """
 import base64
+import concurrent.futures
 import json
+import os
+import subprocess
 import sys
+import tempfile
+import time
 import urllib.parse
 import urllib.request
 
 LISTEN_PORT = 1080
+SING_BOX = os.environ.get("SING_BOX", "/usr/local/bin/sing-box")
 
 
 def b64decode(s: str) -> str:
@@ -138,11 +145,62 @@ def usable(o: dict) -> bool:
     return (o.get("transport") or {}).get("type") not in ("xhttp", "splithttp")  # для готовых конфигов
 
 
+def key_name(link) -> str:
+    if isinstance(link, dict):
+        return str(link.get("tag", ""))
+    if link.startswith("vmess://"):
+        try:
+            return json.loads(b64decode(link[8:])).get("ps", "")
+        except ValueError:
+            return ""
+    return urllib.parse.unquote(link.split("#", 1)[1]) if "#" in link else ""
+
+
+def curl(url: str, port: int | None = None) -> str:
+    cmd = ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "10", url]
+    if port:
+        cmd += ["-x", f"http://127.0.0.1:{port}"]
+    return subprocess.run(cmd, capture_output=True, text=True).stdout.strip() or "000"
+
+
+def probe_one(i: int, o: dict) -> tuple[bool, bool]:
+    """Поднимает sing-box только с этим сервером и проверяет Telegram (3 раза подряд) и сайт Губкина."""
+    port = 21000 + i
+    cfg = {"log": {"level": "error"}, "outbounds": [dict(o, tag="x")],
+           "inbounds": [{"type": "mixed", "listen": "127.0.0.1", "listen_port": port}]}
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+        json.dump(cfg, f)
+    p = subprocess.Popen([SING_BOX, "run", "-c", f.name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        time.sleep(1.5)
+        tg = all(curl("https://api.telegram.org", port) != "000" for _ in range(3))
+        gk = curl("https://lk.gubkin.ru/schedule/", port) == "200"
+    finally:
+        p.terminate()
+        p.wait()
+        os.unlink(f.name)
+    return tg, gk
+
+
+def probe(outbounds: list, names: list) -> tuple[list, list, bool]:
+    """Какие серверы пускают в Telegram, какие — на сайт Губкина (и пускает ли он напрямую)."""
+    print("Проверяю серверы подписки (до пары минут)...", file=sys.stderr)
+    with concurrent.futures.ThreadPoolExecutor(4) as ex:
+        res = list(ex.map(probe_one, range(len(outbounds)), outbounds))
+    direct = curl("https://lk.gubkin.ru/schedule/") == "200"
+    for (tg, gk), o, name in zip(res, outbounds, names):
+        print(f"  {'✅' if tg else '❌'} Telegram  {'✅' if gk else '❌'} Губкин   {name or o['server']}",
+              file=sys.stderr)
+    print(f"  {'✅' if direct else '❌'} Губкин напрямую", file=sys.stderr)
+    return [r[0] for r in res], [r[1] for r in res], direct
+
+
 def main():
-    if len(sys.argv) != 2:
+    args = [a for a in sys.argv[1:] if a != "--probe"]
+    if len(args) != 1:
         sys.exit(__doc__)
-    outbounds, errors, seen = [], [], set()
-    for link in links_from(sys.argv[1]):
+    outbounds, names, errors, seen = [], [], [], set()
+    for link in links_from(args[0]):
         try:
             o = dict(link) if isinstance(link, dict) else parse(link)
         except Exception as e:
@@ -153,18 +211,27 @@ def main():
         if usable(o) and key not in seen:
             seen.add(key)
             outbounds.append(o)
+            names.append(key_name(link))
     if not outbounds:
         sys.exit("Не удалось разобрать ключ:\n" + "\n".join(errors))
     for i, o in enumerate(outbounds):
         o["tag"] = f"key{i + 1}"
     tags = [o["tag"] for o in outbounds]
-    # urltest сам проверяет все серверы подписки и ходит через тот, что отвечает быстрее
-    group = {"type": "urltest", "tag": "proxy", "outbounds": tags,
+    tg_tags, gk_tags = tags, ["direct", *tags]
+    if "--probe" in sys.argv:  # на сервере: заранее отсеиваем серверы, которые не пускают куда нужно
+        tg_ok, gk_ok, direct = probe(outbounds, names)
+        tg_tags = [t for t, ok in zip(tags, tg_ok) if ok] or tags
+        gk_tags = (["direct"] if direct else []) + [t for t, ok in zip(tags, gk_ok) if ok] or gk_tags
+        if not any(tg_ok):
+            print("⚠️  Ни один сервер подписки не пустил в Telegram — оставляю все.", file=sys.stderr)
+    # urltest сам проверяет серверы и ходит через тот, что отвечает быстрее
+    group = {"type": "urltest", "tag": "proxy", "outbounds": tg_tags,
              "url": "https://api.telegram.org", "interval": "3m", "tolerance": 100}
-    # сайт Губкина не пускает серверы хостингов — ищем среди ключей подписки тот, через который он открывается
-    gubkin = {"type": "urltest", "tag": "gubkin", "outbounds": ["direct", *tags],
+    # сайт Губкина не пускает серверы хостингов — ходим к нему тем путём, где он открывается
+    gubkin = {"type": "urltest", "tag": "gubkin", "outbounds": gk_tags,
               "url": "https://lk.gubkin.ru/schedule/", "interval": "10m", "tolerance": 300}
-    print(f"Серверов в конфиге: {len(outbounds)}", file=sys.stderr)
+    print(f"Серверов: {len(outbounds)}, для Telegram: {len(tg_tags)}, для сайта Губкина: {len(gk_tags)}",
+          file=sys.stderr)
     config = {
         "log": {"level": "warn"},
         "inbounds": [{"type": "mixed", "tag": "in", "listen": "127.0.0.1", "listen_port": LISTEN_PORT}],
