@@ -383,3 +383,28 @@ def to_html(lessons: list[Lesson], empty: str = "Занятий нет", today: 
         if not l.cancelled and l.end:
             prev_end = max(prev_end or 0, _minutes(l.end))
     return "\n".join(out).strip()
+
+
+# ---- где находится аудитория (как docs/campus.js)
+
+BUILDING_NAMES = {"main": "Главный корпус", "k2": "2 корпус", "k3": "3 корпус", "lib": "Библиотека"}
+
+
+def locate_room(room: str) -> str:
+    """'2435' -> '3 корпус, 4 этаж'. Нумерация — по путеводителю первокурсника."""
+    import re
+    low = (room or "").lower()
+    if "баа" in low:
+        return "Главный корпус, Большая академическая аудитория"
+    m = re.match(r"\s*(\d{3,4})", room or "")
+    if not m:
+        return ""
+    d = m.group(1)
+    if len(d) == 3:
+        building, floor = "main", int(d[0])
+    else:
+        building = {"1": "k2", "2": "k3", "5": "lib"}.get(d[0])
+        floor = int(d[1])
+    if not building:
+        return ""
+    return f"{BUILDING_NAMES[building]}, " + ("цокольный этаж" if floor == 0 else f"{floor} этаж")

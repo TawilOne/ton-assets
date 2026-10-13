@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Разметка кабинетов — Губкин</title>
+<script src="campus.js"></script>
+<style>
+  body { margin: 0; padding: 16px; font: 15px/1.4 -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+         background: #f2f2f7; color: #1c1c1e; }
+  h1 { font-size: 20px; margin: 0 0 8px; }
+  .box { background: #fff; border-radius: 12px; padding: 12px; margin: 10px 0; }
+  .plan { position: relative; display: inline-block; max-width: 100%; cursor: crosshair; }
+  .plan img { display: block; max-width: 100%; }
+  .dot { position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%;
+         background: #e53935; border: 2px solid #fff; }
+  .lbl { position: absolute; transform: translate(10px, -50%); background: #e53935; color: #fff;
+         font-size: 11px; padding: 1px 4px; border-radius: 4px; white-space: nowrap; }
+  textarea { width: 100%; height: 140px; font: 12px monospace; }
+  button, select, input { font: inherit; padding: 6px 10px; }
+  li { margin: 2px 0; }
+  li button { padding: 0 6px; margin-left: 6px; }
+</style>
+</head>
+<body>
+<h1>Разметка кабинетов на плане</h1>
+<div class="box">
+  1. Выберите план этажа: <select id="plan"></select><br><br>
+  2. Нажмите на кабинет на плане и введите его номер.<br>
+  3. Когда закончите — нажмите «Скопировать» внизу и пришлите текст в чат с Claude.
+</div>
+<div class="box"><div class="plan" id="wrap"><img id="img" alt=""></div></div>
+<div class="box">
+  <b>Отмечено на этом плане:</b>
+  <ul id="list"></ul>
+</div>
+<div class="box">
+  <b>Результат (rooms.json):</b>
+  <textarea id="out" readonly></textarea>
+  <button id="copy">Скопировать</button>
+</div>
+
+<script>
+let rooms = {}, plans = {};
+const sel = document.getElementById("plan"), img = document.getElementById("img"),
+      wrap = document.getElementById("wrap");
+
+function save() { try { localStorage.setItem("gubkin-rooms", JSON.stringify(rooms)); } catch (e) {} }
+
+function draw() {
+  wrap.querySelectorAll(".dot,.lbl").forEach(e => e.remove());
+  const planId = sel.value, list = document.getElementById("list");
+  const here = Object.entries(rooms).filter(([, m]) => m.plan === planId).sort();
+  for (const [room, m] of here) {
+    for (const cls of ["dot", "lbl"]) {
+      const e = document.createElement("div");
+      e.className = cls; e.style.left = m.x * 100 + "%"; e.style.top = m.y * 100 + "%";
+      if (cls === "lbl") e.textContent = room;
+      wrap.appendChild(e);
+    }
+  }
+  list.innerHTML = here.map(([room]) => `<li>${room}<button data-r="${room}">удалить</button></li>`).join("") || "<li>пока ничего</li>";
+  list.querySelectorAll("button").forEach(b => b.onclick = () => { delete rooms[b.dataset.r]; save(); draw(); });
+  const sorted = Object.fromEntries(Object.entries(rooms).sort());
+  document.getElementById("out").value = JSON.stringify(sorted, null, 1);
+}
+
+wrap.onclick = (ev) => {
+  const r = img.getBoundingClientRect();
+  const x = (ev.clientX - r.left) / r.width, y = (ev.clientY - r.top) / r.height;
+  if (x < 0 || x > 1 || y < 0 || y > 1) return;
+  const room = (prompt("Номер кабинета (например 2435):") || "").trim();
+  if (!room) return;
+  const loc = locateRoom(room);
+  if (loc && loc.planId && loc.planId !== sel.value &&
+      !confirm(`По номеру ${room} — это ${BUILDINGS[loc.building].name}, ${floorLabel(loc.floor)}, а открыт план ${sel.value}. Всё равно отметить?`)) return;
+  rooms[room] = { plan: sel.value, x: +x.toFixed(4), y: +y.toFixed(4) };
+  save(); draw();
+};
+
+sel.onchange = () => { img.src = plans[sel.value]; draw(); };
+img.onload = draw;
+
+document.getElementById("copy").onclick = async () => {
+  const t = document.getElementById("out");
+  try { await navigator.clipboard.writeText(t.value); } catch (e) { t.select(); document.execCommand("copy"); }
+  alert("Скопировано. Вставьте этот текст в чат с Claude.");
+};
+
+Promise.all([
+  fetch("rooms.json").then(r => r.json()).catch(() => ({})),
+  fetch("plans.json").then(r => r.json()).catch(() => ({})),
+]).then(([r, p]) => {
+  plans = p;
+  let local = {};
+  try { local = JSON.parse(localStorage.getItem("gubkin-rooms") || "{}"); } catch (e) {}
+  rooms = Object.assign({}, r, local);  // незаконченная разметка не теряется при перезагрузке
+  const ids = Object.keys(plans).sort();
+  sel.innerHTML = ids.map(id => `<option value="${id}">${id}</option>`).join("") ||
+    '<option value="">планов пока нет</option>';
+  if (ids.length) { img.src = plans[ids[0]]; }
+  draw();
+});
+</script>
+</body>
+</html>

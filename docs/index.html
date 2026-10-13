@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Где пара — Губкин</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="campus.js"></script>
+<style>
+  :root {
+    --bg: var(--tg-theme-bg-color, #ffffff);
+    --text: var(--tg-theme-text-color, #1c1c1e);
+    --hint: var(--tg-theme-hint-color, #8e8e93);
+    --card: var(--tg-theme-secondary-bg-color, #f2f2f7);
+    --accent: var(--tg-theme-button-color, #2481cc);
+    --accent-text: var(--tg-theme-button-text-color, #ffffff);
+    --red: #e53935;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 16px; background: var(--bg); color: var(--text);
+         font: 16px/1.4 -apple-system, system-ui, "Segoe UI", Roboto, sans-serif; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .muted { color: var(--hint); font-size: 14px; }
+  .card { background: var(--card); border-radius: 14px; padding: 14px; margin: 12px 0; }
+  .status { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--red); }
+  .status.next { color: var(--accent); }
+  .room { font-size: 34px; font-weight: 700; margin: 2px 0; }
+  .plan { position: relative; border-radius: 14px; overflow: hidden; background: var(--card); margin: 12px 0; }
+  .plan img { display: block; width: 100%; height: auto; }
+  .dot { position: absolute; width: 18px; height: 18px; margin: -9px 0 0 -9px; border-radius: 50%;
+         background: var(--red); border: 3px solid #fff; box-shadow: 0 0 0 0 rgba(229,57,53,.7);
+         animation: pulse 1.6s infinite; }
+  @keyframes pulse { 70% { box-shadow: 0 0 0 18px rgba(229,57,53,0); } 100% { box-shadow: 0 0 0 0 rgba(229,57,53,0); } }
+  .floor-badge { position: absolute; top: 8px; left: 8px; background: rgba(0,0,0,.6); color: #fff;
+                 padding: 4px 10px; border-radius: 10px; font-size: 13px; }
+  .noplan { padding: 28px 16px; text-align: center; }
+  .noplan .big { font-size: 42px; }
+  ul.lessons { list-style: none; padding: 0; margin: 0; }
+  ul.lessons li { display: flex; gap: 12px; align-items: center; padding: 10px 12px; border-radius: 12px; cursor: pointer; }
+  ul.lessons li + li { margin-top: 4px; }
+  ul.lessons li.sel { background: var(--card); }
+  ul.lessons li.past { opacity: .45; }
+  .t { font-variant-numeric: tabular-nums; font-weight: 600; min-width: 92px; }
+  .live { width: 8px; height: 8px; border-radius: 50%; background: var(--red); display: inline-block; margin-left: 6px; }
+</style>
+</head>
+<body>
+<h1 id="title">Где пара</h1>
+<div class="muted" id="date"></div>
+<div id="main"></div>
+<div class="card"><ul class="lessons" id="list"></ul></div>
+
+<script>
+const tg = window.Telegram && window.Telegram.WebApp;
+if (tg) { tg.ready(); tg.expand(); }
+
+// Пары передаёт бот в адресе: ?d=Понедельник, 12 октября&l=[["08:45","10:15","2435","Минералогия","Лабораторная"],...]
+const params = new URLSearchParams(location.search);
+let lessons = [];
+try { lessons = JSON.parse(params.get("l") || "[]"); } catch (e) { lessons = []; }
+document.getElementById("date").textContent = params.get("d") || "";
+
+let rooms = {}, plans = {}, selected = null, userPicked = false;
+
+function minutes(hhmm) { const [h, m] = hhmm.split(":").map(Number); return h * 60 + m; }
+
+function nowMoscow() {  // текущее время по Москве в минутах от полуночи
+  const p = new Intl.DateTimeFormat("ru-RU", { timeZone: "Europe/Moscow", hour: "2-digit", minute: "2-digit", hourCycle: "h23" })
+    .formatToParts(new Date());
+  return +p.find(x => x.type === "hour").value * 60 + +p.find(x => x.type === "minute").value;
+}
+
+// Какая пара сейчас идёт, а если ни одна — какая следующая
+function currentIndex() {
+  const now = nowMoscow();
+  let idx = lessons.findIndex(l => minutes(l[0]) <= now && now < minutes(l[1]));
+  if (idx >= 0) return { idx, live: true };
+  idx = lessons.findIndex(l => minutes(l[0]) > now);
+  return { idx: idx >= 0 ? idx : lessons.length - 1, live: false };
+}
+
+function esc(s) { return String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+
+function render() {
+  const main = document.getElementById("main"), list = document.getElementById("list");
+  if (!lessons.length) {
+    main.innerHTML = `<div class="card noplan"><div class="big">🎉</div>В этот день пар нет</div>`;
+    list.parentElement.style.display = "none";
+    return;
+  }
+  const cur = currentIndex();
+  if (!userPicked) selected = cur.idx;
+  const now = nowMoscow();
+
+  list.innerHTML = lessons.map((l, i) => {
+    const past = minutes(l[1]) <= now, live = i === cur.idx && cur.live;
+    return `<li class="${i === selected ? "sel" : ""} ${past && !live ? "past" : ""}" data-i="${i}">
+      <span class="t">${esc(l[0])}–${esc(l[1])}</span>
+      <span><b>${esc(l[3])}</b>${live ? '<span class="live"></span>' : ""}<br>
+      <span class="muted">${esc(l[4] || "")}${l[2] ? " · ауд. " + esc(l[2]) : ""}</span></span></li>`;
+  }).join("");
+  list.querySelectorAll("li").forEach(li => li.onclick = () => { selected = +li.dataset.i; userPicked = true; render(); });
+
+  const l = lessons[selected], loc = locateRoom(l[2]);
+  const isLive = selected === cur.idx && cur.live;
+  const status = isLive ? "Идёт сейчас" : (minutes(l[1]) <= now ? "Уже прошла" : (selected === cur.idx ? "Следующая пара" : "Предстоит"));
+  let head = `<div class="card">
+    <div class="status ${isLive ? "" : "next"}">${status} · ${esc(l[0])}–${esc(l[1])}</div>
+    <div class="room">${l[2] ? "ауд. " + esc(l[2]) : "аудитория не указана"}</div>
+    <div><b>${esc(l[3])}</b>${l[4] ? " · " + esc(l[4]) : ""}</div>
+    ${loc ? `<div class="muted">${esc(BUILDINGS[loc.building].name)}${loc.floor !== null ? " · " + floorLabel(loc.floor) : ""}${loc.note ? "<br>" + esc(loc.note) : ""}</div>` : ""}
+  </div>`;
+
+  // План этажа: точка на кабинете, если он отмечен в rooms.json
+  const mark = loc && rooms[loc.room];
+  const planId = (mark && mark.plan) || (loc && loc.planId);
+  const planFile = planId && plans[planId];
+  let plan;
+  if (planFile) {
+    plan = `<div class="plan"><img src="${esc(planFile)}" alt="план этажа">
+      <div class="floor-badge">${esc(BUILDINGS[loc.building].name)} · ${floorLabel(loc.floor)}</div>
+      ${mark ? `<div class="dot" style="left:${mark.x * 100}%;top:${mark.y * 100}%"></div>` : ""}</div>
+      ${mark ? "" : `<div class="muted">Этот кабинет ещё не отмечен на плане.</div>`}`;
+  } else {
+    plan = `<div class="card noplan"><div class="big">🏢</div>
+      ${loc ? `${esc(BUILDINGS[loc.building].name)}, ${floorLabel(loc.floor) || "этаж неизвестен"}` : "Корпус не определён по номеру аудитории"}
+      <div class="muted">План этого этажа пока не добавлен</div></div>`;
+  }
+  main.innerHTML = head + plan;
+}
+
+Promise.all([
+  fetch("rooms.json").then(r => r.json()).catch(() => ({})),
+  fetch("plans.json").then(r => r.json()).catch(() => ({})),
+]).then(([r, p]) => { rooms = r; plans = p; render(); });
+render();
+setInterval(render, 30 * 1000);  // каждые 30 секунд проверяем, не началась ли следующая пара
+</script>
+</body>
+</html>

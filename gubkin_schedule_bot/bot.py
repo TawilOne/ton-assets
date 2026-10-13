@@ -23,14 +23,17 @@ import os
 import pathlib
 import threading
 import time
+from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
-from telegram import InputFile, KeyboardButton, ReplyKeyboardMarkup, Update
+from telegram import (InlineKeyboardButton, InlineKeyboardMarkup, InputFile, KeyboardButton,
+                      ReplyKeyboardMarkup, Update, WebAppInfo)
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, TypeHandler, filters
 
 import my_commands as my
 from gubkin_api import CaptchaRequired, GubkinClient, GubkinError
-from schedule import fetch_range, semester_bounds, to_csv, to_html, to_ics, to_json, to_text
+from schedule import (MONTHS, _minutes, fetch_range, locate_room, semester_bounds, to_csv, to_html, to_ics,
+                      to_json, to_text)
 
 MSK = ZoneInfo("Europe/Moscow")
 GROUP_CODE = os.environ.get("GROUP_CODE", "ГМ-26-11")
@@ -159,6 +162,7 @@ async def _show(update: Update, start: dt.date, end: dt.date, empty: str) -> Non
 BUTTONS = [
     [("📅 Сегодня", "cmd_today"), ("➡️ Завтра", "cmd_tomorrow")],
     [("🗓 Неделя", "cmd_week"), ("⏭ След. неделя", "cmd_next")],
+    [("🗺 Где пара", "cmd_map")],
 ]
 KEYBOARD = ReplyKeyboardMarkup([[KeyboardButton(text) for text, _ in row] for row in BUTTONS],
                                resize_keyboard=True)
@@ -247,6 +251,50 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     await update.effective_message.reply_text(
         "Капча принята ✅ Повторите команду." if ok else "Неверно. Отправьте /captcha ещё раз.")
+
+
+# ---- мини-приложение с картой («Где пара»)
+
+DEFAULT_WEBAPP_URL = "https://tawilone.github.io/ton-assets/"
+
+
+async def cmd_map(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Где текущая/следующая пара + кнопка, открывающая карту в мини-приложении.
+    Пары передаются в адресе страницы — сама страница с сайтом Губкина не общается."""
+    now = dt.datetime.now(MSK)
+    now_min = now.hour * 60 + now.minute
+    day = _today()
+    lessons = await _run(update, day, day)
+    if lessons is None:
+        return
+    lessons = [l for l in lessons if not l.cancelled]
+    if not any(l.end and _minutes(l.end) > now_min for l in lessons):  # сегодня пар больше нет — берём завтра
+        day = day + dt.timedelta(days=1)
+        lessons = await _run(update, day, day)
+        if lessons is None:
+            return
+        lessons = [l for l in lessons if not l.cancelled]
+        now_min = -1
+    if not lessons:
+        await update.effective_message.reply_text("Ни сегодня, ни завтра пар нет 🎉")
+        return
+
+    current = next((l for l in lessons if _minutes(l.start) <= now_min < _minutes(l.end or l.start)), None)
+    upcoming = next((l for l in lessons if _minutes(l.start) > now_min), None)
+    lines = []
+    for title, l in (("🔴 Сейчас", current), ("⏭ Следующая", upcoming)):
+        if l:
+            where = f"ауд. {l.room}" if l.room else "аудитория не указана"
+            place = locate_room(l.room)
+            lines.append(f"{title}: {l.start}–{l.end} {l.subject}\n    {where}" + (f" — {place}" if place else ""))
+    when = "Сегодня" if day == _today() else "Завтра"
+    title = f"{when}, {day.day} {MONTHS[day.month - 1]}"
+
+    payload = [[l.start, l.end, l.room, l.subject[:60], l.kind] for l in lessons]
+    url = (os.environ.get("WEBAPP_URL") or _read_setting("webapp.txt") or DEFAULT_WEBAPP_URL) + "?" + urlencode(
+        {"d": title, "l": json.dumps(payload, ensure_ascii=False, separators=(",", ":"))})
+    button = InlineKeyboardMarkup([[InlineKeyboardButton("🗺 Открыть карту", web_app=WebAppInfo(url))]])
+    await update.effective_message.reply_text("\n".join(lines) or title, reply_markup=button)
 
 
 # ---- утренняя рассылка
