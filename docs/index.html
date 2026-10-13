@@ -204,7 +204,7 @@ function heroHTML(l, loc, cur, now) {
 }
 
 function planHTML(loc) {
-  const mark = loc && rooms[loc.room];
+  const mark = loc && findMark(rooms, loc.room);
   const planId = (mark && mark.plan) || (loc && loc.planId);
   const planFile = planId && plans[planId];
   const where = loc ? `${BUILDINGS[loc.building].name}${loc.floor !== null ? " · " + floorLabel(loc.floor) : ""}` : "";
