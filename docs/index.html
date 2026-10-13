@@ -3,138 +3,271 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
 <title>Где пара — Губкин</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <script src="campus.js"></script>
 <style>
   :root {
-    --bg: var(--tg-theme-bg-color, #ffffff);
-    --text: var(--tg-theme-text-color, #1c1c1e);
-    --hint: var(--tg-theme-hint-color, #8e8e93);
-    --card: var(--tg-theme-secondary-bg-color, #f2f2f7);
-    --accent: var(--tg-theme-button-color, #2481cc);
-    --accent-text: var(--tg-theme-button-text-color, #ffffff);
-    --red: #e53935;
+    --bg: #000;
+    --surface: #0f0f11;
+    --surface-2: #17171a;
+    --line: rgba(255,255,255,.08);
+    --text: #f5f5f7;
+    --muted: #8a8a93;
+    --red: #ff0000;
+    --blue: #3d8bff;
+    --radius: 22px;
   }
-  * { box-sizing: border-box; }
-  body { margin: 0; padding: 16px; background: var(--bg); color: var(--text);
-         font: 16px/1.4 -apple-system, system-ui, "Segoe UI", Roboto, sans-serif; }
-  h1 { font-size: 20px; margin: 0 0 4px; }
-  .muted { color: var(--hint); font-size: 14px; }
-  .card { background: var(--card); border-radius: 14px; padding: 14px; margin: 12px 0; }
-  .status { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--red); }
-  .status.next { color: var(--accent); }
-  .room { font-size: 34px; font-weight: 700; margin: 2px 0; }
-  .plan { position: relative; border-radius: 14px; overflow: hidden; background: var(--card); margin: 12px 0; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { background: var(--bg); }
+  body {
+    margin: 0; color: var(--text);
+    font: 15px/1.45 Inter, -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+    padding: max(16px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom));
+    min-height: 100vh;
+    background:
+      radial-gradient(600px 300px at 85% -60px, rgba(255,0,0,.16), transparent 70%),
+      radial-gradient(500px 260px at -10% 0, rgba(61,139,255,.10), transparent 70%),
+      var(--bg);
+    background-attachment: fixed;
+  }
+  .top { display: flex; align-items: flex-end; justify-content: space-between; margin: 4px 2px 18px; }
+  .eyebrow { color: var(--muted); font-size: 13px; font-weight: 500; letter-spacing: .02em; }
+  h1 { margin: 2px 0 0; font-size: 30px; font-weight: 800; letter-spacing: -.03em; }
+  .clock { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--muted); font-size: 15px; }
+
+  .card {
+    background: linear-gradient(180deg, rgba(255,255,255,.045), rgba(255,255,255,.015));
+    border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 18px; margin-bottom: 12px;
+    backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+  }
+
+  /* ---------- главная карточка ---------- */
+  .chip-status { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700;
+                 letter-spacing: .08em; text-transform: uppercase; padding: 6px 11px; border-radius: 99px; }
+  .chip-status.live { color: var(--red); background: rgba(255,0,0,.12); }
+  .chip-status.next { color: var(--blue); background: rgba(61,139,255,.12); }
+  .chip-status.idle { color: var(--muted); background: rgba(255,255,255,.06); }
+  .chip-status i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .chip-status.live i { animation: blink 1s steps(1) infinite; }
+
+  .room { display: flex; align-items: baseline; gap: 8px; margin: 14px 0 2px; }
+  .room small { color: var(--muted); font-size: 16px; font-weight: 600; }
+  .room b { font-size: 64px; line-height: 1; font-weight: 800; letter-spacing: -.045em; }
+  .subject { font-size: 18px; font-weight: 600; letter-spacing: -.01em; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+  .chip { font-size: 13px; font-weight: 500; padding: 6px 11px; border-radius: 99px;
+          background: var(--surface-2); border: 1px solid var(--line); color: #d6d6dc; }
+
+  .progress { margin-top: 18px; }
+  .bar { height: 6px; border-radius: 99px; background: rgba(255,255,255,.08); overflow: hidden; }
+  .bar span { display: block; height: 100%; border-radius: inherit;
+              background: linear-gradient(90deg, #ff4d4d, var(--red)); transition: width .6s ease; }
+  .bar.next span { background: linear-gradient(90deg, #6aa8ff, var(--blue)); }
+  .times { display: flex; justify-content: space-between; margin-top: 8px; font-size: 13px;
+           color: var(--muted); font-variant-numeric: tabular-nums; }
+  .times b { color: var(--text); font-weight: 600; }
+
+  .hint { display: flex; gap: 10px; align-items: flex-start; margin-top: 14px; padding-top: 14px;
+          border-top: 1px solid var(--line); color: #c8c8cf; font-size: 14px; }
+  .hint svg { flex: none; margin-top: 2px; }
+
+  /* ---------- план этажа ---------- */
+  .section-title { display: flex; justify-content: space-between; align-items: center; margin: 0 0 12px; }
+  .section-title h2 { margin: 0; font-size: 17px; font-weight: 700; letter-spacing: -.01em; }
+  .section-title span { color: var(--muted); font-size: 13px; }
+
+  .plan { position: relative; border-radius: 16px; overflow: hidden; background: #fff; }
   .plan img { display: block; width: 100%; height: auto; }
+
+  /* красная точка: чистый #ff0000, мигает */
   .dot { position: absolute; width: 18px; height: 18px; margin: -9px 0 0 -9px; border-radius: 50%;
-         background: var(--red); border: 3px solid #fff; box-shadow: 0 0 0 0 rgba(229,57,53,.7);
-         animation: pulse 1.6s infinite; }
-  @keyframes pulse { 70% { box-shadow: 0 0 0 18px rgba(229,57,53,0); } 100% { box-shadow: 0 0 0 0 rgba(229,57,53,0); } }
-  .floor-badge { position: absolute; top: 8px; left: 8px; background: rgba(0,0,0,.6); color: #fff;
-                 padding: 4px 10px; border-radius: 10px; font-size: 13px; }
-  .noplan { padding: 28px 16px; text-align: center; }
-  .noplan .big { font-size: 42px; }
-  ul.lessons { list-style: none; padding: 0; margin: 0; }
-  ul.lessons li { display: flex; gap: 12px; align-items: center; padding: 10px 12px; border-radius: 12px; cursor: pointer; }
-  ul.lessons li + li { margin-top: 4px; }
-  ul.lessons li.sel { background: var(--card); }
-  ul.lessons li.past { opacity: .45; }
-  .t { font-variant-numeric: tabular-nums; font-weight: 600; min-width: 92px; }
-  .live { width: 8px; height: 8px; border-radius: 50%; background: var(--red); display: inline-block; margin-left: 6px; }
+         background: var(--red); box-shadow: 0 0 12px 3px rgba(255,0,0,.85);
+         animation: blink 1s steps(1) infinite; }
+  .dot::after { content: ""; position: absolute; inset: -9px; border-radius: 50%;
+                border: 2px solid var(--red); animation: ring 1.4s ease-out infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  @keyframes ring { from { transform: scale(.4); opacity: 1; } to { transform: scale(1.6); opacity: 0; } }
+
+  /* схема здания, если плана этажа ещё нет */
+  .tower { display: flex; flex-direction: column-reverse; gap: 5px; max-width: 220px; margin: 4px auto 6px; }
+  .floor { position: relative; height: 26px; border-radius: 8px; background: var(--surface-2);
+           border: 1px solid var(--line); display: flex; align-items: center; padding: 0 10px;
+           font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .floor.on { background: rgba(255,0,0,.12); border-color: rgba(255,0,0,.55); color: #fff; font-weight: 600; }
+  .floor.on .dot { left: auto; right: 14px; top: 50%; width: 12px; height: 12px; margin: -6px 0 0; }
+  .empty-note { text-align: center; color: var(--muted); font-size: 13px; margin-top: 10px; }
+
+  /* ---------- пары дня ---------- */
+  .timeline { position: relative; margin: 0; padding: 0; list-style: none; }
+  .timeline::before { content: ""; position: absolute; left: 7px; top: 10px; bottom: 10px; width: 2px;
+                      background: var(--line); border-radius: 2px; }
+  .timeline li { position: relative; display: grid; grid-template-columns: 1fr auto; gap: 2px 12px;
+                 padding: 10px 12px 10px 30px; margin: 0 -6px; border-radius: 14px; cursor: pointer;
+                 transition: background .2s; }
+  .timeline li::before { content: ""; position: absolute; left: 9px; top: 17px; width: 10px; height: 10px;
+                         border-radius: 50%; background: #2a2a2e; border: 2px solid var(--bg); }
+  .timeline li.sel { background: var(--surface-2); }
+  .timeline li.live::before { background: var(--red); box-shadow: 0 0 8px var(--red); animation: blink 1s steps(1) infinite; }
+  .timeline li.past { opacity: .4; }
+  .tl-subj { font-weight: 600; }
+  .tl-time { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13px; text-align: right; }
+  .tl-meta { color: var(--muted); font-size: 13px; grid-column: 1 / -1; }
+
+  .empty { text-align: center; padding: 48px 16px; }
+  .empty .big { font-size: 48px; }
+  .fade { animation: fade .35s ease both; }
+  @keyframes fade { from { opacity: 0; transform: translateY(6px); } }
 </style>
 </head>
 <body>
-<h1 id="title">Где пара</h1>
-<div class="muted" id="date"></div>
+<div class="top">
+  <div>
+    <div class="eyebrow" id="date"></div>
+    <h1>Где пара</h1>
+  </div>
+  <div class="clock" id="clock"></div>
+</div>
 <div id="main"></div>
-<div class="card"><ul class="lessons" id="list"></ul></div>
+<div class="card" id="day"><div class="section-title"><h2>Пары дня</h2><span id="count"></span></div>
+  <ul class="timeline" id="list"></ul></div>
 
 <script>
 const tg = window.Telegram && window.Telegram.WebApp;
-if (tg) { tg.ready(); tg.expand(); }
+if (tg) {
+  tg.ready(); tg.expand();
+  try { tg.setHeaderColor("#000000"); tg.setBackgroundColor("#000000"); tg.setBottomBarColor && tg.setBottomBarColor("#000000"); } catch (e) {}
+}
 
-// Пары передаёт бот в адресе: ?d=Понедельник, 12 октября&l=[["08:45","10:15","2435","Минералогия","Лабораторная"],...]
+// Пары передаёт бот в адресе: ?d=Сегодня, 13 октября&l=[["08:45","10:15","2435","Минералогия","Лабораторная"],...]
 const params = new URLSearchParams(location.search);
 let lessons = [];
 try { lessons = JSON.parse(params.get("l") || "[]"); } catch (e) { lessons = []; }
 document.getElementById("date").textContent = params.get("d") || "";
 
-let rooms = {}, plans = {}, selected = null, userPicked = false;
+let rooms = {}, plans = {}, selected = null, userPicked = false, lastKey = "", lastSel = null;
 
-function minutes(hhmm) { const [h, m] = hhmm.split(":").map(Number); return h * 60 + m; }
-
-function nowMoscow() {  // текущее время по Москве в минутах от полуночи
-  const p = new Intl.DateTimeFormat("ru-RU", { timeZone: "Europe/Moscow", hour: "2-digit", minute: "2-digit", hourCycle: "h23" })
-    .formatToParts(new Date());
-  return +p.find(x => x.type === "hour").value * 60 + +p.find(x => x.type === "minute").value;
+const minutes = s => { const [h, m] = s.split(":").map(Number); return h * 60 + m; };
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+function plural(n, one, few, many) {
+  const a = n % 10, b = n % 100;
+  return a === 1 && b !== 11 ? one : a >= 2 && a <= 4 && (b < 12 || b > 14) ? few : many;
 }
-
-// Какая пара сейчас идёт, а если ни одна — какая следующая
-function currentIndex() {
-  const now = nowMoscow();
+function dur(min) {  // 75 -> "1 ч 15 мин"
+  const h = Math.floor(min / 60), m = min % 60;
+  return h ? `${h} ч${m ? " " + m + " мин" : ""}` : `${m} мин`;
+}
+function nowMoscow() {
+  const p = new Intl.DateTimeFormat("ru-RU", { timeZone: "Europe/Moscow", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" })
+    .formatToParts(new Date());
+  const g = t => +p.find(x => x.type === t).value;
+  return { min: g("hour") * 60 + g("minute"), sec: g("second"), text: `${String(g("hour")).padStart(2, "0")}:${String(g("minute")).padStart(2, "0")}` };
+}
+function currentIndex(now) {
   let idx = lessons.findIndex(l => minutes(l[0]) <= now && now < minutes(l[1]));
   if (idx >= 0) return { idx, live: true };
   idx = lessons.findIndex(l => minutes(l[0]) > now);
   return { idx: idx >= 0 ? idx : lessons.length - 1, live: false };
 }
 
-function esc(s) { return String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+const ROUTE_ICON = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ff0000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>`;
 
-function render() {
-  const main = document.getElementById("main"), list = document.getElementById("list");
-  if (!lessons.length) {
-    main.innerHTML = `<div class="card noplan"><div class="big">🎉</div>В этот день пар нет</div>`;
-    list.parentElement.style.display = "none";
-    return;
-  }
-  const cur = currentIndex();
-  if (!userPicked) selected = cur.idx;
-  const now = nowMoscow();
-
-  list.innerHTML = lessons.map((l, i) => {
-    const past = minutes(l[1]) <= now, live = i === cur.idx && cur.live;
-    return `<li class="${i === selected ? "sel" : ""} ${past && !live ? "past" : ""}" data-i="${i}">
-      <span class="t">${esc(l[0])}–${esc(l[1])}</span>
-      <span><b>${esc(l[3])}</b>${live ? '<span class="live"></span>' : ""}<br>
-      <span class="muted">${esc(l[4] || "")}${l[2] ? " · ауд. " + esc(l[2]) : ""}</span></span></li>`;
-  }).join("");
-  list.querySelectorAll("li").forEach(li => li.onclick = () => { selected = +li.dataset.i; userPicked = true; render(); });
-
-  const l = lessons[selected], loc = locateRoom(l[2]);
-  const isLive = selected === cur.idx && cur.live;
-  const status = isLive ? "Идёт сейчас" : (minutes(l[1]) <= now ? "Уже прошла" : (selected === cur.idx ? "Следующая пара" : "Предстоит"));
-  let head = `<div class="card">
-    <div class="status ${isLive ? "" : "next"}">${status} · ${esc(l[0])}–${esc(l[1])}</div>
-    <div class="room">${l[2] ? "ауд. " + esc(l[2]) : "аудитория не указана"}</div>
-    <div><b>${esc(l[3])}</b>${l[4] ? " · " + esc(l[4]) : ""}</div>
-    ${loc ? `<div class="muted">${esc(BUILDINGS[loc.building].name)}${loc.floor !== null ? " · " + floorLabel(loc.floor) : ""}${loc.note ? "<br>" + esc(loc.note) : ""}</div>` : ""}
+function heroHTML(l, loc, cur, now) {
+  const s = minutes(l[0]), e = minutes(l[1]);
+  const isLive = s <= now && now < e, isPast = e <= now;
+  const status = isLive ? ["live", "Идёт сейчас"] : isPast ? ["idle", "Уже прошла"]
+               : selected === cur.idx ? ["next", "Следующая"] : ["idle", "Предстоит"];
+  let pct = 0, left = "", right = "";
+  if (isLive) { pct = (now - s) / (e - s) * 100; right = `осталось <b>${dur(e - now)}</b>`; }
+  else if (!isPast) { pct = 0; right = `через <b>${dur(s - now)}</b>`; }
+  else { pct = 100; right = "завершена"; }
+  const chips = [];
+  if (loc) { chips.push(BUILDINGS[loc.building].name); if (loc.floor !== null) chips.push(floorLabel(loc.floor)); }
+  if (l[4]) chips.push(l[4]);
+  return `<div class="card fade">
+    <span class="chip-status ${status[0]}"><i></i>${status[1]}</span>
+    <div class="room"><small>ауд.</small><b>${l[2] ? esc(l[2]) : "—"}</b></div>
+    <div class="subject">${esc(l[3])}</div>
+    <div class="chips">${chips.map(c => `<span class="chip">${esc(c)}</span>`).join("")}</div>
+    <div class="progress">
+      <div class="bar ${isLive ? "" : "next"}"><span style="width:${pct.toFixed(1)}%"></span></div>
+      <div class="times"><span><b>${esc(l[0])}</b> – ${esc(l[1])}</span><span>${right}</span></div>
+    </div>
+    ${loc && loc.note ? `<div class="hint">${ROUTE_ICON}<span>${esc(loc.note)}</span></div>` : ""}
   </div>`;
+}
 
-  // План этажа: точка на кабинете, если он отмечен в rooms.json
+function planHTML(loc) {
   const mark = loc && rooms[loc.room];
   const planId = (mark && mark.plan) || (loc && loc.planId);
   const planFile = planId && plans[planId];
-  let plan;
+  const where = loc ? `${BUILDINGS[loc.building].name}${loc.floor !== null ? " · " + floorLabel(loc.floor) : ""}` : "";
   if (planFile) {
-    plan = `<div class="plan"><img src="${esc(planFile)}" alt="план этажа">
-      <div class="floor-badge">${esc(BUILDINGS[loc.building].name)} · ${floorLabel(loc.floor)}</div>
+    return `<div class="card fade"><div class="section-title"><h2>План этажа</h2><span>${esc(where)}</span></div>
+      <div class="plan"><img src="${esc(planFile)}" alt="план этажа">
       ${mark ? `<div class="dot" style="left:${mark.x * 100}%;top:${mark.y * 100}%"></div>` : ""}</div>
-      ${mark ? "" : `<div class="muted">Этот кабинет ещё не отмечен на плане.</div>`}`;
-  } else {
-    plan = `<div class="card noplan"><div class="big">🏢</div>
-      ${loc ? `${esc(BUILDINGS[loc.building].name)}, ${floorLabel(loc.floor) || "этаж неизвестен"}` : "Корпус не определён по номеру аудитории"}
-      <div class="muted">План этого этажа пока не добавлен</div></div>`;
+      ${mark ? "" : `<div class="empty-note">Этот кабинет ещё не отмечен на плане</div>`}</div>`;
   }
-  main.innerHTML = head + plan;
+  if (loc && loc.floor !== null) {  // схема: корпус этажами, нужный этаж горит красным
+    const top = Math.max(loc.floor + 1, 5);
+    let floors = "";
+    for (let f = 1; f <= top; f++) {
+      floors += `<div class="floor ${f === loc.floor ? "on" : ""}">${f} этаж${f === loc.floor ? '<div class="dot"></div>' : ""}</div>`;
+    }
+    return `<div class="card fade"><div class="section-title"><h2>${esc(BUILDINGS[loc.building].name)}</h2><span>схема</span></div>
+      <div class="tower">${floors}</div>
+      <div class="empty-note">План этого этажа пока не добавлен</div></div>`;
+  }
+  return "";
+}
+
+function render() {
+  const now = nowMoscow();
+  document.getElementById("clock").textContent = now.text;
+  const main = document.getElementById("main"), list = document.getElementById("list");
+  if (!lessons.length) {
+    main.innerHTML = `<div class="card empty"><div class="big">🎉</div><h2>Пар нет</h2><div class="eyebrow">Можно отдохнуть</div></div>`;
+    document.getElementById("day").style.display = "none";
+    return;
+  }
+  const cur = currentIndex(now.min);
+  if (!userPicked) selected = cur.idx;
+  document.getElementById("count").textContent = `${lessons.length} ${plural(lessons.length, "пара", "пары", "пар")}`;
+
+  list.innerHTML = lessons.map((l, i) => {
+    const live = minutes(l[0]) <= now.min && now.min < minutes(l[1]), past = minutes(l[1]) <= now.min;
+    return `<li class="${i === selected ? "sel" : ""} ${live ? "live" : ""} ${past ? "past" : ""}" data-i="${i}">
+      <span class="tl-subj">${esc(l[3])}</span><span class="tl-time">${esc(l[0])}–${esc(l[1])}</span>
+      <span class="tl-meta">${l[2] ? "ауд. " + esc(l[2]) : "аудитория не указана"}${l[4] ? " · " + esc(l[4]) : ""}</span></li>`;
+  }).join("");
+  list.querySelectorAll("li").forEach(li => li.onclick = () => {
+    selected = +li.dataset.i; userPicked = true; lastKey = "";
+    if (tg && tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
+    render(); window.scrollTo({ top: 0, behavior: "smooth" });
+  });
+
+  const l = lessons[selected], loc = locateRoom(l[2]);
+  // перерисовываем главную часть только когда что-то поменялось (иначе анимации дёргаются)
+  const key = `${selected}|${now.min}|${Object.keys(rooms).length}|${Object.keys(plans).length}`;
+  if (key !== lastKey) {
+    main.innerHTML = heroHTML(l, loc, cur, now.min) + planHTML(loc);
+    if (selected === lastSel) main.querySelectorAll(".fade").forEach(e => e.classList.remove("fade"));  // анимация — только при смене пары
+    lastKey = key; lastSel = selected;
+  }
 }
 
 Promise.all([
   fetch("rooms.json").then(r => r.json()).catch(() => ({})),
   fetch("plans.json").then(r => r.json()).catch(() => ({})),
-]).then(([r, p]) => { rooms = r; plans = p; render(); });
+]).then(([r, p]) => { rooms = r; plans = p; lastKey = ""; render(); });
 render();
-setInterval(render, 30 * 1000);  // каждые 30 секунд проверяем, не началась ли следующая пара
+setInterval(render, 5000);  // часы, прогресс пары и переключение на следующую пару
 </script>
 </body>
 </html>

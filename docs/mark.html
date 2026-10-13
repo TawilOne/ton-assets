@@ -6,18 +6,22 @@
 <title>Разметка кабинетов — Губкин</title>
 <script src="campus.js"></script>
 <style>
-  body { margin: 0; padding: 16px; font: 15px/1.4 -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
-         background: #f2f2f7; color: #1c1c1e; }
+  body { margin: 0; padding: 16px; font: 15px/1.4 Inter, -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+         background: #000; color: #f5f5f7; }
   h1 { font-size: 20px; margin: 0 0 8px; }
-  .box { background: #fff; border-radius: 12px; padding: 12px; margin: 10px 0; }
+  .box { background: #0f0f11; border: 1px solid rgba(255,255,255,.08); border-radius: 18px; padding: 14px; margin: 10px 0; }
+  .plan img { background: #fff; border-radius: 10px; }
   .plan { position: relative; display: inline-block; max-width: 100%; cursor: crosshair; }
   .plan img { display: block; max-width: 100%; }
   .dot { position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%;
-         background: #e53935; border: 2px solid #fff; }
-  .lbl { position: absolute; transform: translate(10px, -50%); background: #e53935; color: #fff;
+         background: #ff0000; box-shadow: 0 0 8px #ff0000; }
+  .lbl { position: absolute; transform: translate(10px, -50%); background: #ff0000; color: #fff;
          font-size: 11px; padding: 1px 4px; border-radius: 4px; white-space: nowrap; }
-  textarea { width: 100%; height: 140px; font: 12px monospace; }
-  button, select, input { font: inherit; padding: 6px 10px; }
+  textarea { width: 100%; height: 140px; font: 12px monospace; background: #17171a; color: #f5f5f7;
+             border: 1px solid rgba(255,255,255,.08); border-radius: 10px; padding: 8px; }
+  button, select, input { font: inherit; padding: 8px 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,.12);
+                          background: #17171a; color: #f5f5f7; }
+  #copy { background: #ff0000; border: 0; font-weight: 600; margin-top: 8px; }
   li { margin: 2px 0; }
   li button { padding: 0 6px; margin-left: 6px; }
 </style>
