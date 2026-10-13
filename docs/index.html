@@ -83,11 +83,32 @@
   .section-title h2 { margin: 0; font-size: 17px; font-weight: 700; letter-spacing: -.01em; }
   .section-title span { color: var(--muted); font-size: 13px; }
 
-  .plan { position: relative; border-radius: 16px; overflow: hidden; background: #fff; }
-  .plan img { display: block; width: 100%; height: auto; }
+  /* карта этажа: стены приглушённым чертежом, номера кабинетов поверх */
+  .map { position: relative; border-radius: 16px; overflow: auto; background:
+           radial-gradient(circle at 50% 40%, rgba(255,0,0,.06), transparent 60%),
+           linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px) 0 0 / 22px 22px,
+           linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px) 0 0 / 22px 22px, #070708;
+         border: 1px solid var(--line); -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+  .map::-webkit-scrollbar { display: none; }
+  .map-inner { position: relative; width: 100%; transition: width .35s ease; }
+  .map.zoom { max-height: 62vh; }
+  .map.zoom .map-inner { width: 260%; }
+  .map img { display: block; width: 100%; height: auto; opacity: .5; }
+  .lbl { position: absolute; transform: translate(-50%, -50%); font-size: 11px; font-weight: 500;
+         color: #8a8a96; white-space: nowrap; pointer-events: none; font-variant-numeric: tabular-nums;
+         opacity: 0; transition: opacity .3s; }
+  .map.zoom .lbl { opacity: 1; }   /* без увеличения номера сливаются — показываем только нужный */
+  .lbl.target { opacity: 1; color: #fff; font-weight: 800; font-size: 11px; transform: translate(-50%, -190%);
+                background: var(--red); padding: 2px 7px; border-radius: 7px; z-index: 2;
+                box-shadow: 0 4px 14px rgba(255,0,0,.5); }
+  .map.zoom .lbl.target { font-size: 14px; }
+  .zoom-btn { position: absolute; right: 10px; bottom: 10px; width: 36px; height: 36px; border-radius: 12px;
+              border: 1px solid var(--line); background: rgba(23,23,26,.85); color: var(--text); font-size: 17px;
+              backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+  .map-wrap { position: relative; }
 
   /* красная точка: чистый #ff0000, мигает */
-  .dot { position: absolute; width: 18px; height: 18px; margin: -9px 0 0 -9px; border-radius: 50%;
+  .dot { position: absolute; z-index: 3; width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%;
          background: var(--red); box-shadow: 0 0 12px 3px rgba(255,0,0,.85);
          animation: blink 1s steps(1) infinite; }
   .dot::after { content: ""; position: absolute; inset: -9px; border-radius: 50%;
@@ -151,7 +172,26 @@ let lessons = [];
 try { lessons = JSON.parse(params.get("l") || "[]"); } catch (e) { lessons = []; }
 document.getElementById("date").textContent = params.get("d") || "";
 
-let rooms = {}, plans = {}, selected = null, userPicked = false, lastKey = "", lastSel = null;
+let rooms = {}, plans = {}, selected = null, userPicked = false, lastKey = "", lastSel = null, zoomed = false;
+
+// при увеличении — прокрутить карту так, чтобы точка была по центру
+function centerOnDot() {
+  const map = document.getElementById("map"), dot = document.getElementById("dot");
+  if (!map || !dot) return;
+  map.scrollLeft = dot.offsetLeft - map.clientWidth / 2;
+  map.scrollTop = dot.offsetTop - map.clientHeight / 2;
+}
+function bindZoom() {
+  const btn = document.getElementById("zoom");
+  if (!btn) return;
+  btn.onclick = () => {
+    zoomed = !zoomed;
+    document.getElementById("map").classList.toggle("zoom", zoomed);
+    btn.textContent = zoomed ? "−" : "+";
+    if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred("light");
+    setTimeout(centerOnDot, 360);
+  };
+}
 
 const minutes = s => { const [h, m] = s.split(":").map(Number); return h * 60 + m; };
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -192,7 +232,7 @@ function heroHTML(l, loc, cur, now) {
   if (l[4]) chips.push(l[4]);
   return `<div class="card fade">
     <span class="chip-status ${status[0]}"><i></i>${status[1]}</span>
-    <div class="room"><small>ауд.</small><b>${l[2] ? esc(l[2]) : "—"}</b></div>
+    <div class="room"><small>ауд.</small><b>${l[2] ? esc(loc ? loc.room : l[2]) : "—"}</b></div>
     <div class="subject">${esc(l[3])}</div>
     <div class="chips">${chips.map(c => `<span class="chip">${esc(c)}</span>`).join("")}</div>
     <div class="progress">
@@ -209,9 +249,13 @@ function planHTML(loc) {
   const planFile = planId && plans[planId];
   const where = loc ? `${BUILDINGS[loc.building].name}${loc.floor !== null ? " · " + floorLabel(loc.floor) : ""}` : "";
   if (planFile) {
+    const labels = Object.entries(rooms).filter(([, m]) => m.plan === planId).map(([room, m]) =>
+      `<span class="lbl ${m === mark ? "target" : ""}" style="left:${m.x * 100}%;top:${m.y * 100}%">${esc(room)}</span>`).join("");
     return `<div class="card fade"><div class="section-title"><h2>План этажа</h2><span>${esc(where)}</span></div>
-      <div class="plan"><img src="${esc(planFile)}" alt="план этажа">
-      ${mark ? `<div class="dot" style="left:${mark.x * 100}%;top:${mark.y * 100}%"></div>` : ""}</div>
+      <div class="map-wrap"><div class="map ${zoomed ? "zoom" : ""}" id="map"><div class="map-inner">
+        <img src="${esc(planFile)}" alt="план этажа">${labels}
+        ${mark ? `<div class="dot" id="dot" style="left:${mark.x * 100}%;top:${mark.y * 100}%"></div>` : ""}
+      </div></div><button class="zoom-btn" id="zoom" aria-label="Увеличить">${zoomed ? "−" : "+"}</button></div>
       ${mark ? "" : `<div class="empty-note">Этот кабинет ещё не отмечен на плане</div>`}</div>`;
   }
   if (loc && loc.floor !== null) {  // схема: корпус этажами, нужный этаж горит красным
@@ -259,6 +303,7 @@ function render() {
     main.innerHTML = heroHTML(l, loc, cur, now.min) + planHTML(loc);
     if (selected === lastSel) main.querySelectorAll(".fade").forEach(e => e.classList.remove("fade"));  // анимация — только при смене пары
     lastKey = key; lastSel = selected;
+    bindZoom(); if (zoomed) setTimeout(centerOnDot, 50);
   }
 }
 
