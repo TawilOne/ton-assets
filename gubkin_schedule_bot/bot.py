@@ -168,8 +168,16 @@ KEYBOARD = ReplyKeyboardMarkup([[KeyboardButton(text) for text, _ in row] for ro
                                resize_keyboard=True)
 
 
+# предупреждение: бот в разработке (показывается при /start)
+BETA_NOTE = (
+    "\n\n⚠️ Бот и карта аудиторий ещё в разработке. Возможны ошибки в расписании и на карте — "
+    "не опирайтесь на них полностью и сверяйтесь с официальным расписанием: lk.gubkin.ru/schedule"
+)
+
+
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.effective_message.reply_text(HELP, reply_markup=KEYBOARD)
+    await update.effective_message.reply_text(HELP + BETA_NOTE, reply_markup=KEYBOARD,
+                                              disable_web_page_preview=True)
 
 
 async def cmd_today(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:

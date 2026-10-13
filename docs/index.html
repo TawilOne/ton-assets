@@ -147,6 +147,12 @@
   .tl-time { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13px; text-align: right; }
   .tl-meta { color: var(--muted); font-size: 13px; grid-column: 1 / -1; }
 
+  .beta { display: flex; gap: 10px; align-items: flex-start; margin: 0 0 12px; padding: 12px 14px;
+          border-radius: 16px; background: rgba(255,170,0,.08); border: 1px solid rgba(255,170,0,.22);
+          color: #e9d6b0; font-size: 13px; line-height: 1.4; }
+  .beta b { color: #ffc24d; }
+  .beta button { margin-left: auto; flex: none; border: 0; background: none; color: #a8987a;
+                 font-size: 18px; line-height: 1; padding: 0 2px; cursor: pointer; }
   .empty { text-align: center; padding: 48px 16px; }
   .empty .big { font-size: 48px; }
   .fade { animation: fade .35s ease both; }
@@ -160,6 +166,12 @@
     <h1>Где пара</h1>
   </div>
   <div class="clock" id="clock"></div>
+</div>
+<div class="beta" id="beta">
+  <span>⚠️</span>
+  <span><b>Бета-версия.</b> Карта и расписание ещё дорабатываются и могут содержать ошибки —
+  не опирайтесь на них полностью и сверяйтесь с официальным расписанием.</span>
+  <button id="beta-close" aria-label="Скрыть">×</button>
 </div>
 <div id="main"></div>
 <div class="card" id="day"><div class="section-title"><h2>Пары дня</h2><span id="count"></span></div>
@@ -177,6 +189,13 @@ const params = new URLSearchParams(location.search);
 let lessons = [];
 try { lessons = JSON.parse(params.get("l") || "[]"); } catch (e) { lessons = []; }
 document.getElementById("date").textContent = params.get("d") || "";
+
+// плашку «Бета-версия» можно скрыть — запоминаем на этом устройстве
+try { if (localStorage.getItem("beta-hidden") === "1") document.getElementById("beta").remove(); } catch (e) {}
+document.getElementById("beta-close")?.addEventListener("click", () => {
+  document.getElementById("beta").remove();
+  try { localStorage.setItem("beta-hidden", "1"); } catch (e) {}
+});
 
 let rooms = {}, plans = {}, selected = null, userPicked = false, lastKey = "", lastSel = null, zoomed = false;
 const svgCache = {};
