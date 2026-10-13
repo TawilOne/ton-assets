@@ -534,8 +534,23 @@ def _read_setting(name: str) -> str | None:
     return None
 
 
+class _ShortNetworkErrors(logging.Filter):
+    """Короткие обрывы связи с Telegram (VPN переподключается) — одной строкой вместо простыни ошибок.
+    Бот сам переподключается, это не поломка."""
+    def filter(self, record: logging.LogRecord) -> bool:
+        exc = record.exc_info[1] if record.exc_info else None
+        if exc is not None and type(exc).__name__ in ("NetworkError", "TimedOut"):
+            record.msg = "⚠️ Нет связи с Telegram (проверьте VPN) — пробую переподключиться..."
+            record.args = None
+            record.exc_info = None
+            record.exc_text = None
+        return True
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    for h in logging.getLogger().handlers:
+        h.addFilter(_ShortNetworkErrors())
     # токен и прокси можно задать переменной окружения или файлом рядом с bot.py
     token = os.environ.get("BOT_TOKEN") or _read_setting("token.txt")
     if not token:
