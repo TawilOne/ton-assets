@@ -114,11 +114,11 @@
   .map-wrap { position: relative; }
 
   /* красная точка: чистый #ff0000, мигает */
-  .dot { position: absolute; z-index: 3; width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%;
-         background: var(--red); box-shadow: 0 0 12px 3px rgba(255,0,0,.85);
+  .dot { position: absolute; z-index: 3; width: 8px; height: 8px; margin: -4px 0 0 -4px; border-radius: 50%;
+         background: var(--red); box-shadow: 0 0 6px 1px rgba(255,0,0,.85);
          animation: blink 1s steps(1) infinite; }
-  .dot::after { content: ""; position: absolute; inset: -9px; border-radius: 50%;
-                border: 2px solid var(--red); animation: ring 1.4s ease-out infinite; }
+  .dot::after { content: ""; position: absolute; inset: -5px; border-radius: 50%;
+                border: 1.5px solid var(--red); animation: ring 1.4s ease-out infinite; }
   @keyframes blink { 50% { opacity: 0; } }
   @keyframes ring { from { transform: scale(.4); opacity: 1; } to { transform: scale(1.6); opacity: 0; } }
 
@@ -128,7 +128,7 @@
            border: 1px solid var(--line); display: flex; align-items: center; padding: 0 10px;
            font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .floor.on { background: rgba(255,0,0,.12); border-color: rgba(255,0,0,.55); color: #fff; font-weight: 600; }
-  .floor.on .dot { left: auto; right: 14px; top: 50%; width: 12px; height: 12px; margin: -6px 0 0; }
+  .floor.on .dot { left: auto; right: 14px; top: 50%; width: 8px; height: 8px; margin: -4px 0 0; }
   .empty-note { text-align: center; color: var(--muted); font-size: 13px; margin-top: 10px; }
 
   /* ---------- пары дня ---------- */
