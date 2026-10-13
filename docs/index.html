@@ -84,20 +84,26 @@
   .section-title span { color: var(--muted); font-size: 13px; }
 
   /* карта этажа: стены приглушённым чертежом, номера кабинетов поверх */
-  .map { position: relative; border-radius: 16px; overflow: auto; background:
-           radial-gradient(circle at 50% 40%, rgba(255,0,0,.06), transparent 60%),
-           linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px) 0 0 / 22px 22px,
-           linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px) 0 0 / 22px 22px, #070708;
+  .map { position: relative; border-radius: 16px; overflow: auto; padding: 0;
+         background: radial-gradient(circle at 50% 45%, rgba(255,0,0,.07), transparent 65%), #070708;
          border: 1px solid var(--line); -webkit-overflow-scrolling: touch; scrollbar-width: none; }
   .map::-webkit-scrollbar { display: none; }
   .map-inner { position: relative; width: 100%; transition: width .35s ease; }
   .map.zoom { max-height: 62vh; }
   .map.zoom .map-inner { width: 260%; }
-  .map img { display: block; width: 100%; height: auto; opacity: .5; }
-  .lbl { position: absolute; transform: translate(-50%, -50%); font-size: 11px; font-weight: 500;
-         color: #8a8a96; white-space: nowrap; pointer-events: none; font-variant-numeric: tabular-nums;
-         opacity: 0; transition: opacity .3s; }
-  .map.zoom .lbl { opacity: 1; }   /* без увеличения номера сливаются — показываем только нужный */
+  /* векторная схема этажа (plans/main-N.svg) */
+  .floor-svg { display: block; width: 100%; height: auto; }
+  .floor-svg .block { fill: #0d0d10; stroke: #2e2e36; stroke-width: 1.2; vector-effect: non-scaling-stroke; }
+  .floor-svg .zone { fill: #121216; stroke: #55555f; stroke-width: 1.6; vector-effect: non-scaling-stroke; }
+  .floor-svg .room { fill: #141418; stroke: #34343d; stroke-width: 1; vector-effect: non-scaling-stroke;
+                     transition: fill .3s; }
+  .floor-svg .hall { fill: #1c1c22; }
+  .floor-svg .room.target { fill: rgba(255,0,0,.28); stroke: #ff0000; stroke-width: 1.8; }
+  .floor-svg .num { font: 500 10px Inter, system-ui, sans-serif; fill: #6c6c77; text-anchor: middle;
+                    dominant-baseline: central; opacity: 0; transition: opacity .3s; }
+  .map.zoom .floor-svg .num { opacity: 1; }  /* мелкие номера — только при увеличении */
+  .floor-svg .num.target { display: none; }  /* нужный кабинет подписан красным ярлыком */
+  .lbl { position: absolute; pointer-events: none; white-space: nowrap; }
   .lbl.target { opacity: 1; color: #fff; font-weight: 800; font-size: 11px; transform: translate(-50%, -190%);
                 background: var(--red); padding: 2px 7px; border-radius: 7px; z-index: 2;
                 box-shadow: 0 4px 14px rgba(255,0,0,.5); }
@@ -173,6 +179,7 @@ try { lessons = JSON.parse(params.get("l") || "[]"); } catch (e) { lessons = [];
 document.getElementById("date").textContent = params.get("d") || "";
 
 let rooms = {}, plans = {}, selected = null, userPicked = false, lastKey = "", lastSel = null, zoomed = false;
+const svgCache = {};
 
 // при увеличении — прокрутить карту так, чтобы точка была по центру
 function centerOnDot() {
@@ -249,11 +256,15 @@ function planHTML(loc) {
   const planFile = planId && plans[planId];
   const where = loc ? `${BUILDINGS[loc.building].name}${loc.floor !== null ? " · " + floorLabel(loc.floor) : ""}` : "";
   if (planFile) {
-    const labels = Object.entries(rooms).filter(([, m]) => m.plan === planId).map(([room, m]) =>
-      `<span class="lbl ${m === mark ? "target" : ""}" style="left:${m.x * 100}%;top:${m.y * 100}%">${esc(room)}</span>`).join("");
+    if (!(planId in svgCache)) {  // схему этажа подгружаем один раз
+      svgCache[planId] = "";
+      fetch(planFile).then(r => r.text()).then(t => { svgCache[planId] = t; lastKey = ""; render(); }).catch(() => {});
+    }
+    const targetKey = mark ? Object.keys(rooms).find(k => rooms[k] === mark) : "";
+    const labels = mark ? `<span class="lbl target" style="left:${mark.x * 100}%;top:${mark.y * 100}%">${esc(targetKey)}</span>` : "";
     return `<div class="card fade"><div class="section-title"><h2>План этажа</h2><span>${esc(where)}</span></div>
       <div class="map-wrap"><div class="map ${zoomed ? "zoom" : ""}" id="map"><div class="map-inner">
-        <img src="${esc(planFile)}" alt="план этажа">${labels}
+        ${svgCache[planId]}${labels}
         ${mark ? `<div class="dot" id="dot" style="left:${mark.x * 100}%;top:${mark.y * 100}%"></div>` : ""}
       </div></div><button class="zoom-btn" id="zoom" aria-label="Увеличить">${zoomed ? "−" : "+"}</button></div>
       ${mark ? "" : `<div class="empty-note">Этот кабинет ещё не отмечен на плане</div>`}</div>`;
@@ -298,12 +309,15 @@ function render() {
 
   const l = lessons[selected], loc = locateRoom(l[2]);
   // перерисовываем главную часть только когда что-то поменялось (иначе анимации дёргаются)
-  const key = `${selected}|${now.min}|${Object.keys(rooms).length}|${Object.keys(plans).length}`;
+  const key = `${selected}|${now.min}|${Object.keys(rooms).length}|${Object.keys(plans).length}|${Object.values(svgCache).join("").length}`;
   if (key !== lastKey) {
     main.innerHTML = heroHTML(l, loc, cur, now.min) + planHTML(loc);
     if (selected === lastSel) main.querySelectorAll(".fade").forEach(e => e.classList.remove("fade"));  // анимация — только при смене пары
     lastKey = key; lastSel = selected;
-    bindZoom(); if (zoomed) setTimeout(centerOnDot, 50);
+    bindZoom();
+    const t = main.querySelector(".lbl.target");  // подсветить ячейку нужного кабинета на схеме
+    if (t) main.querySelectorAll(`.floor-svg [data-room="${CSS.escape(t.textContent)}"]`).forEach(e => e.classList.add("target"));
+    if (zoomed) setTimeout(centerOnDot, 50);
   }
 }
 
