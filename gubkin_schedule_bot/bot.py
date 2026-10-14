@@ -312,7 +312,9 @@ async def cmd_map(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     url = (os.environ.get("WEBAPP_URL") or _read_setting("webapp.txt") or DEFAULT_WEBAPP_URL) + "?" + urlencode(
         {"d": title, "l": json.dumps(payload, ensure_ascii=False, separators=(",", ":"))})
     button = InlineKeyboardMarkup([[InlineKeyboardButton("🗺 Открыть карту", web_app=WebAppInfo(url))]])
-    await update.effective_message.reply_text("\n".join(lines) or title, reply_markup=button)
+    note = ("\n\n⚠️ Карта ещё доделывается и может быть неточной: расположение кабинетов "
+            "сверяйте с табличками и планами эвакуации на этаже.")
+    await update.effective_message.reply_text(("\n".join(lines) or title) + note, reply_markup=button)
 
 
 # ---- утренняя рассылка
