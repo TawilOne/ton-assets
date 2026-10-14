@@ -59,13 +59,13 @@ def core(l_top=TOP, l_bot=BOT, r_top=TOP, r_bot=BOT, l_west=True, l_east=True, r
         rows += [(RW[0], r_top, RC[0], CN, "y"), (RW[0], CS, RC[0], r_bot, "y")]
     if r_east:
         rows += [(RC[1], r_top, RW[1], 232, "y"), (RC[1], 276, RW[1], r_bot, "y")]
-    return dict(rows=rows, halls=halls, stairs=list(STAIRS), lifts=list(LIFTS), blocks=[], cells=[], gaps=[], polys=[])
+    return dict(rows=rows, halls=halls, stairs=list(STAIRS), lifts=list(LIFTS), blocks=[], cells=[], gaps=[], polys=[], doors=[])
 
 
 def floor(**kw):
     """core() + дополнения: rows/halls/stairs/lifts/blocks добавляются, drop — убрать ряды/холлы,
     пересекающие указанные прямоугольники (под торцевые залы и т.п.)."""
-    extra = {k: kw.pop(k, []) for k in ("rows", "halls", "stairs", "lifts", "blocks", "cells", "gaps", "polys", "drop")}
+    extra = {k: kw.pop(k, []) for k in ("rows", "halls", "stairs", "lifts", "blocks", "cells", "gaps", "polys", "doors", "drop")}
     spec = core(**kw)
 
     def hit(r, d):
@@ -74,6 +74,6 @@ def floor(**kw):
     for d in extra["drop"]:
         spec["rows"] = [r for r in spec["rows"] if not hit(r, d)]
         spec["halls"] = [h for h in spec["halls"] if not hit(h, d)]
-    for k in ("rows", "halls", "stairs", "lifts", "blocks", "cells", "gaps", "polys"):
+    for k in ("rows", "halls", "stairs", "lifts", "blocks", "cells", "gaps", "polys", "doors"):
         spec[k] += extra[k]
     return spec

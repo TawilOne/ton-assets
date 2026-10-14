@@ -267,7 +267,16 @@ def doors(cells, spec):
         return any(inside(px, py, h) for h in halls) or any(in_poly(px, py, p) for p in hpolys)
 
     out, leaves = [], []
+    # заданные вручную двери: (x, y) — середина проёма на нижней стене помещения, створка внутрь
+    manual = spec.get("doors", [])
+    for x, y in manual:
+        w = DOOR
+        out.append(f"M{f1(x - w / 2)} {f1(y)}H{f1(x + w / 2)}")
+        leaves.append(f"M{f1(x - w / 2)} {f1(y)}V{f1(y - w)}A{f1(w)} {f1(w)} 0 0 1 {f1(x + w / 2)} {f1(y)}")
+    skip = [r for _, r in cells if any(r[0] < x < r[2] and abs(y - r[3]) < 1 for x, y in manual)]
     for _, r in cells:
+        if r in skip:
+            continue
         x0, y0, x1, y1 = r
         cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
         # (точка снаружи стороны, ориентация, координата стены, отрезок вдоль, куда «внутрь» комнаты)
