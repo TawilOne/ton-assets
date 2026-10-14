@@ -24,7 +24,7 @@ def dark_mask(img):
     a = np.asarray(img).astype(int)
     mx, mn = a.max(axis=2), a.min(axis=2)
     r, g, b = a[..., 0], a[..., 1], a[..., 2]
-    greenish = (g > r + 10) & (g > b + 10)  # зелёные стрелки эвакуации — не стены
+    greenish = (g > r + 6) & (g > b + 3)  # зелёные стрелки эвакуации — не стены
     return (mx < 95) & (mx - mn < 35) & ~greenish
 
 
@@ -47,7 +47,7 @@ def walls_in(mask, rect, axis):
             j = i
             while j < len(hit) and hit[j]:
                 j += 1
-            if j - i <= 22:  # стена тонкая; широкое тёмное пятно — значок
+            if j - i <= 44:  # стена тонкая; широкое тёмное пятно — значок
                 c = a0 + (i + j - 1) / 2
                 out.append(round(c / K + (X0 if axis == "x" else Y0), 1))
             i = j

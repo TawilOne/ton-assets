@@ -96,7 +96,7 @@ def free_segments(row, fixed):
 
 WALLS_FILE = HERE / "walls.json"
 WALLS = json.loads(WALLS_FILE.read_text(encoding="utf-8")) if WALLS_FILE.exists() else {}
-SLIVER = 20     # кусок без номера уже этого — не помещение
+SLIVER = 26     # кусок без номера уже этого — не помещение
 MIN_PIECE = 6   # помещение уже этого — скорее ошибка распознавания стены, сливаем с соседом
 
 
@@ -119,16 +119,23 @@ def by_walls(lo, hi, ws, rooms, k, mk):
         changed = False
         for i, (a, b) in enumerate(pieces):
             # крошечный кабинет рядом с помещением без номера — стену нашли не там, объединяем
-            if b - a < 12 and named(a, b):
+            if b - a < 25 and named(a, b):
+                # узкий кабинет между помещениями без номера — его стены нашлись по значкам,
+                # а настоящий кабинет занимает и соседние пустые куски
                 nb = [j for j in (i - 1, i + 1) if 0 <= j < len(pieces) and not named(*pieces[j])]
                 if nb:
-                    j = nb[0]
-                    pieces[min(i, j)] = (min(pieces[i][0], pieces[j][0]), max(pieces[i][1], pieces[j][1]))
-                    del pieces[max(i, j)]
+                    j0, j1 = min(nb + [i]), max(nb + [i])
+                    pieces[j0:j1 + 1] = [(pieces[j0][0], pieces[j1][1])]
                     changed = True
                     break
             if b - a < SLIVER and not named(a, b):
-                j = i - 1 if i == len(pieces) - 1 or (i > 0 and named(*pieces[i - 1])) else i + 1
+                # к какому соседу присоединить: к тому, чей номер ближе (номер стоит у своей стены)
+                def dist_to(j):
+                    if not 0 <= j < len(pieces):
+                        return float("inf")
+                    ps = [min(max(r[k], lo), hi - 1e-6) for r in rooms if pieces[j][0] <= min(max(r[k], lo), hi - 1e-6) < pieces[j][1]]
+                    return min((abs(p - (a + b) / 2) for p in ps), default=1e6)
+                j = min((i - 1, i + 1), key=dist_to)
                 lo_, hi_ = min(pieces[i][0], pieces[j][0]), max(pieces[i][1], pieces[j][1])
                 pieces[min(i, j)] = (lo_, hi_)
                 del pieces[max(i, j)]
