@@ -696,6 +696,69 @@ async def track_user(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             log.warning("cannot notify admin")
 
 
+# ---- рассылка объявления всем пользователям (только администратор)
+
+_BC_SPLIT = re.compile(r"^\s*-{2,}\s*(ru|en|fr)\s*-{2,}\s*$", re.IGNORECASE | re.MULTILINE)
+BROADCAST_HELP = (
+    "Как разослать объявление всем, кто запускал бота:\n\n"
+    "/broadcast Текст объявления\n\n"
+    "Можно добавить переводы — тем, у кого выбран английский или французский, придёт свой вариант:\n\n"
+    "/broadcast Текст по-русски\n---en---\nText in English\n---fr---\nTexte en français\n\n"
+    "Сначала бот покажет, как будет выглядеть сообщение, и спросит подтверждение. "
+    "Вместе с сообщением у каждого обновится нижняя панель кнопок — /start нажимать не нужно."
+)
+
+
+def _parse_broadcast(text: str) -> dict[str, str]:
+    parts = _BC_SPLIT.split(text)
+    out = {"ru": parts[0].strip()}
+    for lang, body in zip(parts[1::2], parts[2::2]):
+        out[lang.lower()] = body.strip()
+    return {k: v for k, v in out.items() if v}
+
+
+async def cmd_broadcast(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id != _admin_id():
+        await update.effective_message.reply_text("Эта команда только для администратора.")
+        return
+    raw = (update.effective_message.text or "").split(maxsplit=1)
+    texts = _parse_broadcast(raw[1]) if len(raw) > 1 else {}
+    if not texts.get("ru"):
+        await update.effective_message.reply_text(BROADCAST_HELP)
+        return
+    ctx.bot_data["broadcast"] = texts
+    n = len(_load_users())
+    for lang in i18n.LANGS:  # предпросмотр каждого варианта
+        if lang in texts:
+            await update.effective_message.reply_text(f"Предпросмотр ({i18n.LANG_NAMES[lang]}):\n\n{texts[lang]}")
+    await update.effective_message.reply_text(
+        f"Отправить это {n} пользователям? Без перевода английским и французским придёт русский вариант.",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(f"✅ Отправить всем ({n})", callback_data="bc:send"),
+                                            InlineKeyboardButton("✖️ Отмена", callback_data="bc:cancel")]]))
+
+
+async def on_broadcast(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    q = update.callback_query
+    await q.answer()
+    if update.effective_user.id != _admin_id():
+        return
+    texts = ctx.bot_data.pop("broadcast", None)
+    if q.data != "bc:send" or not texts:
+        await q.edit_message_text("Рассылка отменена.")
+        return
+    await q.edit_message_text("Отправляю…")
+    ok = fail = 0
+    for uid in list(_load_users()):
+        lang = i18n.get_lang(uid)
+        try:  # вместе с сообщением — новая нижняя панель на языке пользователя
+            await ctx.bot.send_message(int(uid), texts.get(lang) or texts["ru"], reply_markup=keyboard(lang))
+            ok += 1
+        except Exception:  # заблокировал бота, удалил аккаунт и т. п.
+            fail += 1
+        await asyncio.sleep(0.05)  # Telegram ограничивает ~30 сообщений в секунду
+    await q.edit_message_text(f"✅ Разослано: {ok}" + (f"\nНе доставлено: {fail} (заблокировали бота)" if fail else ""))
+
+
 async def cmd_myid(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_message.reply_text(
         f"Ваш id: <code>{update.effective_user.id}</code>", parse_mode="HTML")
@@ -846,6 +909,8 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(on_lang, pattern=r"^lang:"))
     app.add_handler(CallbackQueryHandler(on_sub_button, pattern=r"^sub:"))
     app.add_handler(CommandHandler("untranslated", cmd_untranslated))
+    app.add_handler(CommandHandler("broadcast", cmd_broadcast))
+    app.add_handler(CallbackQueryHandler(on_broadcast, pattern=r"^bc:"))
     app.add_handler(CommandHandler("myid", cmd_myid))
     app.add_handler(CommandHandler("users", cmd_users))
     app.add_handler(CommandHandler("today", cmd_today))
