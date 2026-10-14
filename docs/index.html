@@ -93,12 +93,14 @@
   .map.zoom .map-inner { width: 320%; }
   /* векторная схема этажа (plans/main-N.svg): толстая внешняя стена, тонкие перегородки */
   .floor-svg { display: block; width: 100%; height: auto; }
-  .floor-svg .wall { fill: none; stroke: #6b6b78; stroke-width: 5; stroke-linejoin: round; }
+  .floor-svg .wall { fill: none; stroke: #7a7a88; stroke-width: 6; stroke-linejoin: round; }
   .floor-svg .base { fill: #101014; stroke: none; }
-  .floor-svg .hall { fill: #1d1d23; }
-  .floor-svg .block { fill: #131317; stroke: #3a3a44; stroke-width: 1.2; }  /* помещения без номера на плане */
-  .floor-svg .room { fill: #15151a; stroke: #3a3a44; stroke-width: 1.2; transition: fill .3s; }
+  .floor-svg .hall { fill: #26262e; }
+  .floor-svg .block { fill: #111115; stroke: #5a5a67; stroke-width: 1.5; }  /* помещения без номера на плане */
+  .floor-svg .room { fill: #131317; stroke: #5a5a67; stroke-width: 1.5; transition: fill .3s; }
   .floor-svg .room.target { fill: rgba(255,0,0,.30); stroke: #ff3030; stroke-width: 2; }
+  .floor-svg .door { fill: none; stroke: #26262e; stroke-width: 3; stroke-linecap: butt; }  /* дверные проёмы */
+  .floor-svg .leaf { fill: none; stroke: #5a5a67; stroke-width: .8; }  /* створка двери */
   .floor-svg .stair { fill: #24242c; stroke: #4a4a56; stroke-width: 1; }
   .floor-svg .lift { fill: #1a1a20; stroke: #4a4a56; stroke-width: 1; }
   .floor-svg .steps { fill: none; stroke: #4e4e5a; stroke-width: .9; }

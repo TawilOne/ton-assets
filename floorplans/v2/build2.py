@@ -165,6 +165,61 @@ def lift_svg(r):
     return rect(r, "lift") + f'<path class="steps" d="M{f1(x0 + 3)} {f1(y0 + 3)}L{f1(x1 - 3)} {f1(y1 - 3)}M{f1(x1 - 3)} {f1(y0 + 3)}L{f1(x0 + 3)} {f1(y1 - 3)}"/>'
 
 
+def in_poly(px, py, poly):
+    inside_ = False
+    for (x1, y1), (x2, y2) in zip(poly, poly[1:] + poly[:1]):
+        if (y1 > py) != (y2 > py) and px < x1 + (py - y1) * (x2 - x1) / (y2 - y1):
+            inside_ = not inside_
+    return inside_
+
+
+DOOR = 9  # ширина дверного проёма, ед.
+
+
+def doors(cells, spec):
+    """Дверь в каждом помещении — на стороне, которая выходит в коридор или холл.
+    Рисуется проёмом в стене (отрезок цвета коридора поверх контура)."""
+    halls = spec["halls"] + spec["gaps"]
+    hpolys = [p for n, p in spec["polys"] if n is None]
+
+    def is_hall(px, py):
+        return any(inside(px, py, h) for h in halls) or any(in_poly(px, py, p) for p in hpolys)
+
+    out, leaves = [], []
+    for _, r in cells:
+        x0, y0, x1, y1 = r
+        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+        # (точка снаружи стороны, ориентация, координата стены, отрезок вдоль, куда «внутрь» комнаты)
+        sides = [((cx, y0 - 3), "h", y0, x0, x1, 1), ((cx, y1 + 3), "h", y1, x0, x1, -1),
+                 ((x0 - 3, cy), "v", x0, y0, y1, 1), ((x1 + 3, cy), "v", x1, y0, y1, -1)]
+        for (px, py), kind, at, a, b, inward in sides:
+            if not is_hall(px, py):
+                continue
+            w = min(DOOR, (b - a) * 0.5)
+            m = (a + b) / 2
+            p0, p1 = m - w / 2, m + w / 2
+            sweep = 1 if inward > 0 else 0
+            if kind == "h":
+                out.append(f"M{f1(p0)} {f1(at)}H{f1(p1)}")
+                leaves.append(f"M{f1(p0)} {f1(at)}V{f1(at + inward * w)}"
+                              f"A{f1(w)} {f1(w)} 0 0 {1 - sweep} {f1(p1)} {f1(at)}")
+            else:
+                out.append(f"M{f1(at)} {f1(p0)}V{f1(p1)}")
+                leaves.append(f"M{f1(at)} {f1(p0)}H{f1(at + inward * w)}"
+                              f"A{f1(w)} {f1(w)} 0 0 {sweep} {f1(at)} {f1(p1)}")
+            break
+    for _, r in spec["stairs"] + spec["lifts"]:  # лестницы и лифты тоже открыты в коридор
+        x0, y0, x1, y1 = r
+        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+        for (px, py), d in (((cx, y0 - 3), f"M{f1(x0 + 2)} {f1(y0)}H{f1(x1 - 2)}"),
+                            ((cx, y1 + 3), f"M{f1(x0 + 2)} {f1(y1)}H{f1(x1 - 2)}"),
+                            ((x0 - 3, cy), f"M{f1(x0)} {f1(y0 + 2)}V{f1(y1 - 2)}"),
+                            ((x1 + 3, cy), f"M{f1(x1)} {f1(y0 + 2)}V{f1(y1 - 2)}")):
+            if is_hall(px, py):
+                out.append(d)
+    return f'<path class="door" d="{"".join(out)}"/><path class="leaf" d="{"".join(leaves)}"/>'
+
+
 def build(floor_no, spec, labels):
     cells, lost = layout(floor_no, spec, labels)
     shapes = [r[:4] for r in spec["rows"]] + spec["halls"] + [s[1] for s in spec["stairs"]] + \
@@ -212,6 +267,7 @@ def build(floor_no, spec, labels):
            f'<g class="g-halls">{"".join(rect(h, "hall") for h in spec["halls"] + spec["gaps"])}</g>'
            f'<g class="g-blocks">{"".join(rect(b, "block") for b in spec["blocks"])}</g>'
            f'<g class="g-rooms">{"".join(rooms_svg)}</g>'
+           f'<g class="g-doors">{doors(cells + [(None, b) for b in spec["blocks"]], spec)}</g>'
            f'<g class="g-stairs">{"".join(stair_svg(s[1]) for s in spec["stairs"])}'
            f'{"".join(lift_svg(s[1]) for s in spec["lifts"])}</g>'
            f'<g class="g-nums">{"".join(nums)}</g></svg>')
