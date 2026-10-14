@@ -367,6 +367,8 @@ SUBJECTS = {
     "начертательная геометрия и инженерная графика": ("Descriptive Geometry and Engineering Graphics",
                                                       "Géométrie descriptive et dessin technique"),
     "компьютерная графика": ("Computer Graphics", "Infographie"),
+    "инженерно-геологическая графика": ("Engineering Geological Graphics",
+                                        "Dessin technique en géologie de l'ingénieur"),
     # гуманитарные
     "история россии": ("History of Russia", "Histoire de la Russie"),
     "история": ("History", "Histoire"),
@@ -382,6 +384,8 @@ SUBJECTS = {
     "экономика": ("Economics", "Économie"),
     "правоведение": ("Law", "Droit"),
     "психология": ("Psychology", "Psychologie"),
+    "профессионально-личностное саморазвитие": ("Professional and Personal Self-Development",
+                                                "Développement personnel et professionnel"),
     "социология": ("Sociology", "Sociologie"),
     "безопасность жизнедеятельности": ("Health and Safety", "Santé et sécurité"),
     "основы системного и критического мышления": ("Fundamentals of Systems and Critical Thinking",
