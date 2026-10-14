@@ -66,7 +66,9 @@ def ssh(args: list[str], data: bytes | None = None, batch: bool = True, timeout:
     if batch:
         opts += ["-o", "BatchMode=yes"]  # без вопросов: только по ключу
     # скрытое окно — только для тихой работы: иначе запрос пароля уйдёт в невидимое окно
-    return subprocess.run(["ssh", *opts, *args], input=data, capture_output=batch, timeout=timeout,
+    # когда спрашиваем пароль — ждём сколько угодно: человек может отвлечься
+    return subprocess.run(["ssh", *opts, *args], input=data, capture_output=batch,
+                          timeout=timeout if batch else None,
                           creationflags=NO_WINDOW if batch else 0)
 
 
