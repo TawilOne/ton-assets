@@ -18,6 +18,7 @@ import os
 import pathlib
 import subprocess
 import sys
+import time
 
 HERE = pathlib.Path(__file__).resolve().parent
 os.chdir(HERE)
@@ -109,16 +110,36 @@ def solve_captcha() -> None:
     raise CaptchaRequired("капча не пройдена")
 
 
+def due(mon: dt.date, this_monday: dt.date, gid) -> bool:
+    """Нужно ли сейчас скачивать неделю. Чем меньше запросов, тем реже капча:
+    текущая и 2 следующие недели — каждый раз (там бывают переносы), дальние — раз в сутки,
+    прошедшие — только если их ещё нет."""
+    hit = bot.client._cache.get((mon, str(gid)))
+    if hit is None:
+        return True
+    age = time.time() - hit[0]
+    if mon < this_monday:
+        return False
+    if mon <= this_monday + dt.timedelta(weeks=2):
+        return True
+    return age > 20 * 3600
+
+
 def download(interactive: bool) -> int:
     """Скачивает все недели семестра. Отдельные недели сайт может не отдавать (например, летние —
     отвечает ошибкой 500): их пропускаем. Ошибка — только если не скачалась текущая неделя."""
     bot._ensure_group()
     gid = bot._group["id"]
-    bot.client.cache_ttl = 60  # за свежим — на сайт; прошедшие недели всё равно помнятся 6 ч
+    bot.client.cache_ttl = 60  # то, что решили обновить, — берём с сайта, а не из кэша
+    bot.client.delay = 1.5     # частые запросы подряд сайт принимает за робота и просит капчу
     weeks = mondays(dt.date.today())
     this_monday = dt.date.today() - dt.timedelta(days=dt.date.today().weekday())
     failed: dict[dt.date, str] = {}
+    fetched = 0
     for i, mon in enumerate(weeks, 1):
+        if not interactive and not due(mon, this_monday, gid):
+            continue
+        fetched += 1
         bot.client.stale = False
         while True:
             try:
@@ -141,7 +162,7 @@ def download(interactive: bool) -> int:
         say("не скачались недели: " + ", ".join(f"{m:%d.%m} ({e})" for m, e in failed.items()))
     if this_monday in failed:
         raise GubkinError(f"не скачалась текущая неделя: {failed[this_monday]}")
-    return len(weeks) - len(failed)
+    return fetched - len(failed)
 
 
 def run(interactive: bool) -> int:
@@ -155,7 +176,7 @@ def run(interactive: bool) -> int:
     try:
         n = download(interactive)
         status.update(ok=True, last_ok=now)
-        say(f"скачано недель: {n}")
+        say(f"обновлено недель: {n}")
     except CaptchaRequired:
         status["error"] = "captcha"
         say("сайт просит капчу — запустите sync_now.bat")

@@ -392,9 +392,17 @@ async def sync_watch_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         st = {}
     state = ctx.bot_data.setdefault("sync_watch", {})
     msg, key = None, None
-    if st.get("error") == "captcha":
-        msg, key = ("🔐 Сайт Губкина попросил капчу у ноутбука. Запустите на ноутбуке sync_now.bat "
-                    "и введите код с картинки."), "captcha:" + str(st.get("time"))
+    # капча бывает разовой: ноутбук попробует снова через 3 часа. Пишем, только если из-за неё
+    # расписание не обновляется уже больше суток, и не чаще раза в день
+    last_ok = st.get("last_ok")
+    try:
+        stuck = not last_ok or dt.datetime.now() - dt.datetime.fromisoformat(last_ok) > dt.timedelta(hours=24)
+    except ValueError:
+        stuck = True
+    if st.get("error") == "captcha" and stuck:
+        msg, key = ("🔐 Сайт Губкина уже сутки просит капчу у ноутбука, расписание не обновляется. "
+                    "Запустите на ноутбуке sync_now.bat и введите код с картинки."), \
+            "captcha:" + dt.date.today().isoformat()
     age = client.cache_age()
     if not msg and age is not None and age > 48 * 3600:
         msg = (f"📅 Расписание на сервере обновлялось {_ago(age)}. Включите ноутбук с интернетом "
