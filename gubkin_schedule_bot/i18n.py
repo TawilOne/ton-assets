@@ -297,6 +297,7 @@ KINDS = [  # (часть русского названия, английский
     ("зач", "Pass/fail test", "Épreuve de validation"),
     ("консул", "Q&A session", "Séance de questions-réponses"),
     ("курсов", "Coursework", "Projet de semestre"),
+    ("мероприят", "Event", "Événement"),
 ]
 
 
@@ -356,6 +357,9 @@ SUBJECTS = {
     "геоморфология": ("Geomorphology", "Géomorphologie"),
     "геотектоника": ("Geotectonics", "Géotectonique"),
     "введение в специальность": ("Introduction to the Specialty", "Introduction à la spécialité"),
+    "введение в геологию": ("Introduction to Geology", "Introduction à la géologie"),
+    "геодезия и топография": ("Geodesy and Topography", "Géodésie et topographie"),
+    "топография": ("Topography", "Topographie"),
     "введение в профессию": ("Introduction to the Profession", "Introduction au métier"),
     # графика
     "начертательная геометрия": ("Descriptive Geometry", "Géométrie descriptive"),
@@ -380,6 +384,14 @@ SUBJECTS = {
     "психология": ("Psychology", "Psychologie"),
     "социология": ("Sociology", "Sociologie"),
     "безопасность жизнедеятельности": ("Health and Safety", "Santé et sécurité"),
+    "основы системного и критического мышления": ("Fundamentals of Systems and Critical Thinking",
+                                                  "Fondements de la pensée systémique et critique"),
+    "критическое мышление": ("Critical Thinking", "Pensée critique"),
+    # не предметы, а виды занятий, которые сайт иногда пишет вместо названия
+    "консультация": ("Q&A session", "Séance de questions-réponses"),
+    "мероприятие": ("Event", "Événement"),
+    "экзамен": ("Exam", "Examen"),
+    "зачет": ("Pass/fail test", "Épreuve de validation"),
     "основы проектной деятельности": ("Introduction to Project Work", "Initiation au travail en mode projet"),
     # физкультура
     "физическая культура и спорт": ("Physical Education and Sport", "Éducation physique et sportive"),
@@ -444,6 +456,11 @@ _NOTES = [
 ]
 
 
+# «Консультация по дисциплине "Введение в геологию"» и т. п. — вид занятия + предмет из словаря
+_BY_SUBJECT = re.compile(r'^\s*(консультаци[яи]|экзамен|зач[её]т|лекци[яи]|семинар)\s+по\s+(?:дисциплине\s+)?'
+                         r'["«“„]?(.+?)["»”“]?\s*\.?\s*$', re.IGNORECASE)
+
+
 def note(text: str, lang: str = "ru") -> str:
     if lang == "ru":
         return text
@@ -451,4 +468,13 @@ def note(text: str, lang: str = "ru") -> str:
         m = re.match(pattern, text)
         if m:
             return (en if lang == "en" else fr).format(m.group(1))
+    m = _BY_SUBJECT.match(text)
+    if m:
+        what, subj = kind(m.group(1), lang), subject(m.group(2), lang)
+        if subj != m.group(2) or has_subject(m.group(2)):
+            return f"{what}{NBSP if lang == 'fr' else ''}: {subj}"
+        q = ("«\u00a0", "\u00a0»") if lang == "fr" else ("“", "”")
+        return f"{what}{NBSP if lang == 'fr' else ''}: {q[0]}{m.group(2)}{q[1]}"
+    if has_subject(text.strip(" .")):
+        return subject(text.strip(" ."), lang)
     return text
