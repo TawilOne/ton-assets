@@ -10,6 +10,8 @@
     TG_PROXY      — прокси только для Telegram, если api.telegram.org недоступен
                     (например socks5://127.0.0.1:1080 или http://host:port).
                     Сайт Губкина при этом открывается напрямую.
+    TG_API_BASE   — адрес пересыльщика Bot API (например https://имя.workers.dev),
+                    если Telegram заблокирован, а VPN нет (файл tg_api.txt — то же самое).
 """
 
 from __future__ import annotations
@@ -566,7 +568,12 @@ def main() -> None:
                .get_updates_connect_timeout(30).get_updates_read_timeout(30)
                # команды обрабатываются параллельно: /start не ждёт, пока грузится чужой /today
                .concurrent_updates(True))
-    if proxy:
+    # пересыльщик (например, Cloudflare Worker): бот ходит в Telegram через свой адрес вместо api.telegram.org
+    relay = (os.environ.get("TG_API_BASE") or _read_setting("tg_api.txt") or "").rstrip("/")
+    if relay:
+        builder = builder.base_url(f"{relay}/bot").base_file_url(f"{relay}/file/bot")
+        log.info("Telegram via relay %s", relay)
+    elif proxy:
         builder = builder.proxy(proxy).get_updates_proxy(proxy)
         log.info("Telegram via proxy %s", proxy.split("@")[-1])
     app = builder.build()
