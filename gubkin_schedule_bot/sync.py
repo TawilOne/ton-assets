@@ -34,6 +34,8 @@ TASK = "GubkinSync"
 LOG = HERE / "sync.log"
 STATUS = HERE / "sync_status.json"
 NO_WINDOW = 0x08000000 if os.name == "nt" else 0  # ssh из pythonw не должен мигать чёрным окном
+# свой ключ без пароля только для sync — чтобы не зависеть от других ключей на ноутбуке
+KEY = pathlib.Path.home() / ".ssh" / "gubkin_sync_ed25519"
 
 
 def say(msg: str) -> None:
@@ -59,7 +61,8 @@ def server() -> str:
 
 
 def ssh(args: list[str], data: bytes | None = None, batch: bool = True, timeout: int = 90):
-    opts = ["-o", "ConnectTimeout=20", "-o", "StrictHostKeyChecking=accept-new"]
+    opts = ["-i", str(KEY), "-o", "IdentitiesOnly=yes",
+            "-o", "ConnectTimeout=20", "-o", "StrictHostKeyChecking=accept-new"]
     if batch:
         opts += ["-o", "BatchMode=yes"]  # без вопросов: только по ключу
     # скрытое окно — только для тихой работы: иначе запрос пароля уйдёт в невидимое окно
@@ -167,7 +170,7 @@ def setup() -> None:
     srv = server()
     print(f"Сервер: {srv}  (другой адрес — впишите его в server.txt)\n")
 
-    key = pathlib.Path.home() / ".ssh" / "id_ed25519"
+    key = KEY
     if not key.exists():
         print("1) Создаю ключ для входа на сервер без пароля...")
         key.parent.mkdir(exist_ok=True)
@@ -214,7 +217,7 @@ def setup() -> None:
         "$s = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries "
         "-DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 15)\n"
         f"Register-ScheduledTask -TaskName '{TASK}' -Action $a -Trigger $t1,$t2 -Settings $s -Force | Out-Null\n"
-    )
+    ).replace("\n", "; ")  # одной строкой: перевод строки в аргументе командной строки Windows ненадёжен
     r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps])
     if r.returncode != 0:
         sys.exit("❌ Не удалось добавить в автозапуск. Запустите sync_setup.bat правой кнопкой → "
