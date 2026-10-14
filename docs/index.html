@@ -90,18 +90,21 @@
   .map::-webkit-scrollbar { display: none; }
   .map-inner { position: relative; width: 100%; transition: width .35s ease; }
   .map.zoom { max-height: 62vh; }
-  .map.zoom .map-inner { width: 260%; }
-  /* векторная схема этажа (plans/main-N.svg) */
+  .map.zoom .map-inner { width: 320%; }
+  /* векторная схема этажа (plans/main-N.svg): толстая внешняя стена, тонкие перегородки */
   .floor-svg { display: block; width: 100%; height: auto; }
-  .floor-svg .block { fill: #0d0d10; stroke: #2e2e36; stroke-width: 1.2; vector-effect: non-scaling-stroke; }
-  .floor-svg .zone { fill: #121216; stroke: #55555f; stroke-width: 1.6; vector-effect: non-scaling-stroke; }
-  .floor-svg .room { fill: #141418; stroke: #34343d; stroke-width: 1; vector-effect: non-scaling-stroke;
-                     transition: fill .3s; }
-  .floor-svg .hall { fill: #1c1c22; }
-  .floor-svg .room.target { fill: rgba(255,0,0,.28); stroke: #ff0000; stroke-width: 1.8; }
-  .floor-svg .num { font: 500 10px Inter, system-ui, sans-serif; fill: #6c6c77; text-anchor: middle;
-                    dominant-baseline: central; opacity: 0; transition: opacity .3s; }
-  .map.zoom .floor-svg .num { opacity: 1; }  /* мелкие номера — только при увеличении */
+  .floor-svg .wall { fill: none; stroke: #6b6b78; stroke-width: 5; stroke-linejoin: round; }
+  .floor-svg .base { fill: #101014; stroke: none; }
+  .floor-svg .hall { fill: #1d1d23; }
+  .floor-svg .block { fill: #0b0b0e; }
+  .floor-svg .room { fill: #15151a; stroke: #3a3a44; stroke-width: 1.2; transition: fill .3s; }
+  .floor-svg .room.target { fill: rgba(255,0,0,.30); stroke: #ff3030; stroke-width: 2; }
+  .floor-svg .stair { fill: #24242c; stroke: #4a4a56; stroke-width: 1; }
+  .floor-svg .lift { fill: #1a1a20; stroke: #4a4a56; stroke-width: 1; }
+  .floor-svg .steps { fill: none; stroke: #4e4e5a; stroke-width: .9; }
+  .floor-svg .num { font-family: Inter, system-ui, sans-serif; font-weight: 600; fill: #8a8a96;
+                    text-anchor: middle; dominant-baseline: central; opacity: 0; transition: opacity .3s; }
+  .map.zoom .floor-svg .num { opacity: 1; }  /* номера — при увеличении, без него карта чистая */
   .floor-svg .num.target { display: none; }  /* нужный кабинет подписан красным ярлыком */
   .lbl { position: absolute; pointer-events: none; white-space: nowrap; }
   .lbl.target { opacity: 1; color: #fff; font-weight: 800; font-size: 11px; transform: translate(-50%, -190%);
