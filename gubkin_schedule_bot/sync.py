@@ -110,27 +110,38 @@ def solve_captcha() -> None:
 
 
 def download(interactive: bool) -> int:
+    """Скачивает все недели семестра. Отдельные недели сайт может не отдавать (например, летние —
+    отвечает ошибкой 500): их пропускаем. Ошибка — только если не скачалась текущая неделя."""
     bot._ensure_group()
     gid = bot._group["id"]
     bot.client.cache_ttl = 60  # за свежим — на сайт; прошедшие недели всё равно помнятся 6 ч
     weeks = mondays(dt.date.today())
-    bot.client.stale = False
+    this_monday = dt.date.today() - dt.timedelta(days=dt.date.today().weekday())
+    failed: dict[dt.date, str] = {}
     for i, mon in enumerate(weeks, 1):
+        bot.client.stale = False
         while True:
             try:
                 bot.client.week(mon, gid)
+                if bot.client.stale:  # сайт не ответил, вернулась старая копия
+                    failed[mon] = "сайт не ответил"
                 break
             except CaptchaRequired:
                 if not interactive:
                     raise
                 solve_captcha()
+            except (GubkinError, OSError, ValueError) as e:
+                failed[mon] = str(e)
+                break
         if interactive:
             print(f"\r  неделя {i}/{len(weeks)}", end="", flush=True)
     if interactive:
         print()
-    if bot.client.stale:
-        raise GubkinError("сайт Губкина ответил не на все недели — часть расписания старая")
-    return len(weeks)
+    if failed:
+        say("не скачались недели: " + ", ".join(f"{m:%d.%m} ({e})" for m, e in failed.items()))
+    if this_monday in failed:
+        raise GubkinError(f"не скачалась текущая неделя: {failed[this_monday]}")
+    return len(weeks) - len(failed)
 
 
 def run(interactive: bool) -> int:
