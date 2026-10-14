@@ -286,7 +286,9 @@ function planHTML(loc) {
       fetch(planFile).then(r => r.text()).then(t => { svgCache[planId] = t; lastKey = ""; render(); }).catch(() => {});
     }
     const targetKey = mark ? Object.keys(rooms).find(k => rooms[k] === mark) : "";
-    const labels = mark ? `<span class="lbl target" style="left:${mark.x * 100}%;top:${mark.y * 100}%">${esc(targetKey)}</span>` : "";
+    // у верхнего края карты ярлык не поместится над точкой — ставим его под точкой
+    const below = mark && mark.y < 0.15 ? ";transform:translate(-50%,90%)" : "";
+    const labels = mark ? `<span class="lbl target" style="left:${mark.x * 100}%;top:${mark.y * 100}%${below}">${esc(targetKey)}</span>` : "";
     return `<div class="card fade"><div class="section-title"><h2>План этажа</h2><span>${esc(where)}</span></div>
       <div class="map-wrap"><div class="map ${zoomed ? "zoom" : ""}" id="map"><div class="map-inner">
         ${svgCache[planId]}${labels}
