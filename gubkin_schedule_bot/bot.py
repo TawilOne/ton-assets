@@ -178,7 +178,8 @@ async def _show(update: Update, start: dt.date, end: dt.date, empty_key: str) ->
 BUTTONS = [
     [("btn_today", "cmd_today"), ("btn_tomorrow", "cmd_tomorrow")],
     [("btn_week", "cmd_week"), ("btn_next", "cmd_next")],
-    [("btn_map", "cmd_map")],  # карта — главная кнопка, одна во всю ширину
+    [("btn_digest", "cmd_digest")],  # рассылка в выбранное время
+    [("btn_map", "cmd_map")],  # карта — главная кнопка, одна во всю ширину, последней строкой
 ]
 # настройки — не в нижней панели, а в меню команд Telegram (кнопка «Меню») и командой /settings;
 # текст кнопки на любом языке -> команда (кнопки старой клавиатуры тоже работают)
@@ -418,6 +419,17 @@ def _sub_markup(lang: str, on: bool) -> InlineKeyboardMarkup:
 def _sub_status(chat_id, lang: str) -> str:
     sub = _load_subs().get(str(chat_id))
     return i18n.t("sub_on", lang, time=sub["time"]) if sub else i18n.t("sub_off", lang)
+
+
+async def cmd_digest(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Кнопка «⏰ Рассылка расписания»: если рассылки нет — сразу спрашиваем время,
+    если есть — показываем время и кнопки «Изменить время» / «Отключить рассылку»."""
+    chat, lang = update.effective_chat.id, _lang(update)
+    if str(chat) not in _load_subs():
+        await cmd_subscribe(update, ctx)
+        return
+    await update.effective_message.reply_text(_sub_status(chat, lang),
+                                              reply_markup=InlineKeyboardMarkup(_sub_markup(lang, True)))
 
 
 async def cmd_subscribe(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:

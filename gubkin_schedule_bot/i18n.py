@@ -81,6 +81,7 @@ TEXT = {
     "btn_week": {"ru": "🗓 Неделя", "en": "🗓 This week", "fr": "🗓 Cette semaine"},
     "btn_next": {"ru": "⏭ След. неделя", "en": "⏭ Next week", "fr": "⏭ Semaine prochaine"},
     "btn_map": {"ru": "🗺 Где пара", "en": "🗺 Where's my class", "fr": "🗺 Où est mon cours"},
+    "btn_digest": {"ru": "⏰ Рассылка расписания", "en": "⏰ Daily timetable", "fr": "⏰ Envoi quotidien"},
     "btn_settings": {"ru": "⚙️ Настройки", "en": "⚙️ Settings", "fr": "⚙️ Paramètres"},
     "settings": {"ru": "⚙️ <b>Настройки</b>\nЯзык: {name}\n\nВыберите язык:",
                  "en": "⚙️ <b>Settings</b>\nLanguage: {name}\n\nChoose a language:",
