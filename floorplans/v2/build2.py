@@ -19,7 +19,13 @@ HERE = pathlib.Path(__file__).resolve().parent
 DOCS = HERE.parent.parent / "docs"
 PAD = 14            # поля вокруг здания в схеме
 MIN_CELL = 16       # кабинет не уже этого (ед.), если в ряду хватает места
-OVERRIDE = {}       # ручные поправки позиций номеров: {"343": (x, y)} в каноне
+# ручные поправки: номера, которые распознаватель не прочитал на фото (позиция в каноне)
+OVERRIDE = {
+    "727": (21, 191), "730": (100, 440), "710Б": (986, 122),
+    "440": (100, 15), "441-6": (33, 70), "414": (1154, 358), "422": (980, 40),
+    "336Б": (248, 198), "241А": (1203, 362),
+    "120": (549, 229), "120А": (591, 202), "118": (663, 202),
+}
 
 
 def isotonic(t):
@@ -118,8 +124,11 @@ def layout(floor_no, spec, labels):
         lo, hi = (x0, x1) if s["axis"] == "x" else (y0, y1)
         for (name, _, _), (a, b) in zip(rooms, split(lo, hi, [t[k] for t in rooms])):
             cells.append((name, (a, y0, b, y1) if s["axis"] == "x" else (x0, a, x1, b)))
-        if not rooms:  # ряд без номеров — просто помещения без подписи
-            cells.append((None, s["rect"]))
+        if not rooms:  # ряд без номеров на плане — делим на помещения обычного размера, без подписи
+            n = max(1, round((hi - lo) / 38))
+            for i in range(n):
+                a, b = lo + (hi - lo) * i / n, lo + (hi - lo) * (i + 1) / n
+                cells.append((None, (a, y0, b, y1) if s["axis"] == "x" else (x0, a, x1, b)))
     return cells, lost
 
 
