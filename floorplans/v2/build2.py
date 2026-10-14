@@ -18,6 +18,7 @@ from floors import FLOORS
 HERE = pathlib.Path(__file__).resolve().parent
 DOCS = HERE.parent.parent / "docs"
 PAD = 14            # поля вокруг здания в схеме
+MAX_CELL = 110      # кабинет не длиннее этого вдоль ряда (если номер в ряду один)
 MIN_CELL = 16       # кабинет не уже этого (ед.), если в ряду хватает места
 # ручные поправки: номера, которые распознаватель не прочитал на фото (позиция в каноне)
 OVERRIDE = {
@@ -122,8 +123,20 @@ def layout(floor_no, spec, labels):
         k = 1 if s["axis"] == "x" else 2
         rooms = sorted(s["rooms"], key=lambda t: t[k])
         lo, hi = (x0, x1) if s["axis"] == "x" else (y0, y1)
-        for (name, _, _), (a, b) in zip(rooms, split(lo, hi, [t[k] for t in rooms])):
-            cells.append((name, (a, y0, b, y1) if s["axis"] == "x" else (x0, a, x1, b)))
+        mk = (lambda a, b: (a, y0, b, y1)) if s["axis"] == "x" else (lambda a, b: (x0, a, x1, b))
+        for (name, *xy), (a, b) in zip(rooms, split(lo, hi, [t[k] for t in rooms])):
+            if b - a > MAX_CELL:  # один номер на длинный ряд — не тянем кабинет на весь ряд
+                c = min(max(xy[k - 1], a + MAX_CELL / 2), b - MAX_CELL / 2)
+                a2, b2 = c - MAX_CELL / 2, c + MAX_CELL / 2
+                for fa, fb in ((a, a2), (b2, b)):  # остаток — помещения без номера
+                    n = round((fb - fa) / 38)
+                    if n == 0:  # узкий остаток отдаём кабинету
+                        a2, b2 = (fa, b2) if fa == a else (a2, fb)
+                        continue
+                    for i in range(n):
+                        cells.append((None, mk(fa + (fb - fa) * i / n, fa + (fb - fa) * (i + 1) / n)))
+                a, b = a2, b2
+            cells.append((name, mk(a, b)))
         if not rooms:  # ряд без номеров на плане — делим на помещения обычного размера, без подписи
             n = max(1, round((hi - lo) / 38))
             for i in range(n):

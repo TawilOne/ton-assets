@@ -100,7 +100,8 @@
   .floor-svg .room { fill: #131317; stroke: #5a5a67; stroke-width: 1.5; transition: fill .3s; }
   .floor-svg .room.target { fill: rgba(255,0,0,.30); stroke: #ff3030; stroke-width: 2; }
   .floor-svg .door { fill: none; stroke: #26262e; stroke-width: 3; stroke-linecap: butt; }  /* дверные проёмы */
-  .floor-svg .leaf { fill: none; stroke: #5a5a67; stroke-width: .8; }  /* створка двери */
+  .floor-svg .leaf { fill: none; stroke: #5a5a67; stroke-width: .8; display: none; }  /* створка двери */
+  .map.zoom .floor-svg .leaf { display: inline; }  /* створки — только при увеличении, иначе рябит */
   .floor-svg .stair { fill: #24242c; stroke: #4a4a56; stroke-width: 1; }
   .floor-svg .lift { fill: #1a1a20; stroke: #4a4a56; stroke-width: 1; }
   .floor-svg .steps { fill: none; stroke: #4e4e5a; stroke-width: .9; }
