@@ -169,18 +169,18 @@
 <div class="top">
   <div>
     <div class="eyebrow" id="date"></div>
-    <h1>Где пара</h1>
+    <h1 id="title">Где пара</h1>
   </div>
   <div class="clock" id="clock"></div>
 </div>
 <div class="beta" id="beta">
   <span>⚠️</span>
-  <span><b>Бета-версия.</b> Карта и расписание ещё дорабатываются и могут содержать ошибки —
+  <span id="beta-text"><b>Бета-версия.</b> Карта и расписание ещё дорабатываются и могут содержать ошибки —
   не опирайтесь на них полностью и сверяйтесь с официальным расписанием.</span>
   <button id="beta-close" aria-label="Скрыть">×</button>
 </div>
 <div id="main"></div>
-<div class="card" id="day"><div class="section-title"><h2>Пары дня</h2><span id="count"></span></div>
+<div class="card" id="day"><div class="section-title"><h2 id="day-title">Пары дня</h2><span id="count"></span></div>
   <ul class="timeline" id="list"></ul></div>
 
 <script>
@@ -195,6 +195,40 @@ const params = new URLSearchParams(location.search);
 let lessons = [];
 try { lessons = JSON.parse(params.get("l") || "[]"); } catch (e) { lessons = []; }
 document.getElementById("date").textContent = params.get("d") || "";
+
+// тексты страницы на выбранном языке (LANG и L3 — из campus.js)
+const TX = {
+  title: L3("Где пара", "Where's my class", "Où est mon cours"),
+  beta: L3("<b>Бета-версия.</b> Карта и расписание ещё дорабатываются и могут содержать ошибки — не опирайтесь на них полностью и сверяйтесь с официальным расписанием.",
+           "<b>Beta version.</b> The map and the timetable are still being improved and may contain errors, so don't rely on them completely and check the official timetable.",
+           "<b>Version bêta.</b> Le plan et l'emploi du temps sont encore en cours d'amélioration et peuvent contenir des erreurs. Ne vous y fiez pas entièrement et consultez l'emploi du temps officiel."),
+  day: L3("Пары дня", "Today's classes", "Cours du jour"),
+  live: L3("Идёт сейчас", "In progress", "En cours"),
+  past: L3("Уже прошла", "Finished", "Terminé"),
+  next: L3("Следующая", "Next", "Suivant"),
+  later: L3("Предстоит", "Upcoming", "À venir"),
+  left: d => L3(`осталось <b>${d}</b>`, `<b>${d}</b> left`, `il reste <b>${d}</b>`),
+  in: d => L3(`через <b>${d}</b>`, `in <b>${d}</b>`, `dans <b>${d}</b>`),
+  over: L3("завершена", "finished", "terminé"),
+  room: L3("ауд.", "room", "salle"),
+  noRoom: L3("аудитория не указана", "room not specified", "salle non précisée"),
+  plan: L3("План этажа", "Floor plan", "Plan de l'étage"),
+  scheme: L3("схема", "diagram", "schéma"),
+  notMarked: L3("Этот кабинет ещё не отмечен на плане", "This room isn't marked on the plan yet", "Cette salle n'est pas encore indiquée sur le plan"),
+  noPlan: L3("План этого этажа пока не добавлен", "There's no plan for this floor yet", "Le plan de cet étage n'est pas encore disponible"),
+  none: L3("Пар нет", "No classes", "Pas de cours"),
+  rest: L3("Можно отдохнуть", "Time to relax", "Profitez-en pour vous reposer"),
+  count: n => LANG === "en" ? `${n} ${n === 1 ? "class" : "classes"}` : LANG === "fr" ? `${n} cours`
+            : `${n} ${plural(n, "пара", "пары", "пар")}`,
+  zoom: L3("Увеличить", "Zoom in", "Agrandir"),
+  hide: L3("Скрыть", "Hide", "Masquer"),
+};
+document.documentElement.lang = LANG;
+document.title = TX.title + L3(" — Губкин", " — Gubkin", " — Gubkin");
+document.getElementById("title").textContent = TX.title;
+document.getElementById("beta-text").innerHTML = TX.beta;
+document.getElementById("beta-close").setAttribute("aria-label", TX.hide);
+document.getElementById("day-title").textContent = TX.day;
 
 // плашку «Бета-версия» можно скрыть — запоминаем на этом устройстве
 try { if (localStorage.getItem("beta-hidden") === "1") document.getElementById("beta").remove(); } catch (e) {}
@@ -231,9 +265,10 @@ function plural(n, one, few, many) {
   const a = n % 10, b = n % 100;
   return a === 1 && b !== 11 ? one : a >= 2 && a <= 4 && (b < 12 || b > 14) ? few : many;
 }
-function dur(min) {  // 75 -> "1 ч 15 мин"
+function dur(min) {  // 75 -> "1 ч 15 мин" / "1 h 15 min"
   const h = Math.floor(min / 60), m = min % 60;
-  return h ? `${h} ч${m ? " " + m + " мин" : ""}` : `${m} мин`;
+  const [hu, mu] = LANG === "ru" ? ["ч", "мин"] : ["h", "min"];
+  return h ? `${h}\u00a0${hu}${m ? " " + m + "\u00a0" + mu : ""}` : `${m}\u00a0${mu}`;
 }
 function nowMoscow() {
   const p = new Intl.DateTimeFormat("ru-RU", { timeZone: "Europe/Moscow", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" })
@@ -253,18 +288,18 @@ const ROUTE_ICON = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" 
 function heroHTML(l, loc, cur, now) {
   const s = minutes(l[0]), e = minutes(l[1]);
   const isLive = s <= now && now < e, isPast = e <= now;
-  const status = isLive ? ["live", "Идёт сейчас"] : isPast ? ["idle", "Уже прошла"]
-               : selected === cur.idx ? ["next", "Следующая"] : ["idle", "Предстоит"];
+  const status = isLive ? ["live", TX.live] : isPast ? ["idle", TX.past]
+               : selected === cur.idx ? ["next", TX.next] : ["idle", TX.later];
   let pct = 0, left = "", right = "";
-  if (isLive) { pct = (now - s) / (e - s) * 100; right = `осталось <b>${dur(e - now)}</b>`; }
-  else if (!isPast) { pct = 0; right = `через <b>${dur(s - now)}</b>`; }
-  else { pct = 100; right = "завершена"; }
+  if (isLive) { pct = (now - s) / (e - s) * 100; right = TX.left(dur(e - now)); }
+  else if (!isPast) { pct = 0; right = TX.in(dur(s - now)); }
+  else { pct = 100; right = TX.over; }
   const chips = [];
   if (loc) { chips.push(BUILDINGS[loc.building].name); if (loc.floor !== null) chips.push(floorLabel(loc.floor)); }
   if (l[4]) chips.push(l[4]);
   return `<div class="card fade">
     <span class="chip-status ${status[0]}"><i></i>${status[1]}</span>
-    <div class="room"><small>ауд.</small><b>${l[2] ? esc(loc ? loc.room : l[2]) : "—"}</b></div>
+    <div class="room"><small>${TX.room}</small><b>${l[2] ? esc(loc ? loc.room : l[2]) : "—"}</b></div>
     <div class="subject">${esc(l[3])}</div>
     <div class="chips">${chips.map(c => `<span class="chip">${esc(c)}</span>`).join("")}</div>
     <div class="progress">
@@ -289,22 +324,22 @@ function planHTML(loc) {
     // у верхнего края карты ярлык не поместится над точкой — ставим его под точкой
     const below = mark && mark.y < 0.15 ? ";transform:translate(-50%,90%)" : "";
     const labels = mark ? `<span class="lbl target" style="left:${mark.x * 100}%;top:${mark.y * 100}%${below}">${esc(targetKey)}</span>` : "";
-    return `<div class="card fade"><div class="section-title"><h2>План этажа</h2><span>${esc(where)}</span></div>
+    return `<div class="card fade"><div class="section-title"><h2>${TX.plan}</h2><span>${esc(where)}</span></div>
       <div class="map-wrap"><div class="map ${zoomed ? "zoom" : ""}" id="map"><div class="map-inner">
         ${svgCache[planId]}${labels}
         ${mark ? `<div class="dot" id="dot" style="left:${mark.x * 100}%;top:${mark.y * 100}%"></div>` : ""}
-      </div></div><button class="zoom-btn" id="zoom" aria-label="Увеличить">${zoomed ? "−" : "+"}</button></div>
-      ${mark ? "" : `<div class="empty-note">Этот кабинет ещё не отмечен на плане</div>`}</div>`;
+      </div></div><button class="zoom-btn" id="zoom" aria-label="${TX.zoom}">${zoomed ? "−" : "+"}</button></div>
+      ${mark ? "" : `<div class="empty-note">${TX.notMarked}</div>`}</div>`;
   }
   if (loc && loc.floor !== null) {  // схема: корпус этажами, нужный этаж горит красным
     const top = Math.max(loc.floor + 1, 5);
     let floors = "";
     for (let f = 1; f <= top; f++) {
-      floors += `<div class="floor ${f === loc.floor ? "on" : ""}">${f} этаж${f === loc.floor ? '<div class="dot"></div>' : ""}</div>`;
+      floors += `<div class="floor ${f === loc.floor ? "on" : ""}">${esc(floorLabel(f))}${f === loc.floor ? '<div class="dot"></div>' : ""}</div>`;
     }
-    return `<div class="card fade"><div class="section-title"><h2>${esc(BUILDINGS[loc.building].name)}</h2><span>схема</span></div>
+    return `<div class="card fade"><div class="section-title"><h2>${esc(BUILDINGS[loc.building].name)}</h2><span>${TX.scheme}</span></div>
       <div class="tower">${floors}</div>
-      <div class="empty-note">План этого этажа пока не добавлен</div></div>`;
+      <div class="empty-note">${TX.noPlan}</div></div>`;
   }
   return "";
 }
@@ -314,19 +349,19 @@ function render() {
   document.getElementById("clock").textContent = now.text;
   const main = document.getElementById("main"), list = document.getElementById("list");
   if (!lessons.length) {
-    main.innerHTML = `<div class="card empty"><div class="big">🎉</div><h2>Пар нет</h2><div class="eyebrow">Можно отдохнуть</div></div>`;
+    main.innerHTML = `<div class="card empty"><div class="big">🎉</div><h2>${TX.none}</h2><div class="eyebrow">${TX.rest}</div></div>`;
     document.getElementById("day").style.display = "none";
     return;
   }
   const cur = currentIndex(now.min);
   if (!userPicked) selected = cur.idx;
-  document.getElementById("count").textContent = `${lessons.length} ${plural(lessons.length, "пара", "пары", "пар")}`;
+  document.getElementById("count").textContent = TX.count(lessons.length);
 
   list.innerHTML = lessons.map((l, i) => {
     const live = minutes(l[0]) <= now.min && now.min < minutes(l[1]), past = minutes(l[1]) <= now.min;
     return `<li class="${i === selected ? "sel" : ""} ${live ? "live" : ""} ${past ? "past" : ""}" data-i="${i}">
       <span class="tl-subj">${esc(l[3])}</span><span class="tl-time">${esc(l[0])}–${esc(l[1])}</span>
-      <span class="tl-meta">${l[2] ? "ауд. " + esc(l[2]) : "аудитория не указана"}${l[4] ? " · " + esc(l[4]) : ""}</span></li>`;
+      <span class="tl-meta">${l[2] ? TX.room + " " + esc(l[2]) : TX.noRoom}${l[4] ? " · " + esc(l[4]) : ""}</span></li>`;
   }).join("");
   list.querySelectorAll("li").forEach(li => li.onclick = () => {
     selected = +li.dataset.i; userPicked = true; lastKey = "";

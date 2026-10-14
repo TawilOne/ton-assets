@@ -5,11 +5,21 @@
 //   3 корпус       — «2 + этаж + номер»   (2435 → 4 этаж)
 //   Библиотека     — «5 + этаж + номер»   (5810 → 8 этаж)
 
+// язык страницы: бот передаёт его в адресе (?lg=en / fr), по умолчанию русский
+const LANG = (() => {
+  try { const v = new URLSearchParams(location.search).get("lg"); return ["en", "fr"].includes(v) ? v : "ru"; }
+  catch (e) { return "ru"; }
+})();
+const L3 = (ru, en, fr) => (LANG === "en" ? en : LANG === "fr" ? fr : ru);
+
 const BUILDINGS = {
-  main: { name: "Главный корпус" },
-  k2: { name: "2 корпус (лабораторный)" },
-  k3: { name: "3 корпус", note: "Из главного корпуса — через столовую на 2 этаже" },
-  lib: { name: "Библиотека" },
+  main: { name: L3("Главный корпус", "Main building", "Bâtiment principal") },
+  k2: { name: L3("2 корпус (лабораторный)", "Building 2 (labs)", "Bâtiment 2 (laboratoires)") },
+  k3: { name: L3("3 корпус", "Building 3", "Bâtiment 3"),
+        note: L3("Из главного корпуса — через столовую на 2 этаже",
+                 "From the main building, go through the canteen on the 2nd floor",
+                 "Depuis le bâtiment principal, passez par la cantine au 1er étage") },
+  lib: { name: L3("Библиотека", "Library", "Bibliothèque") },
 };
 
 // Возвращает {building, floor, room, planId, note} или null.
@@ -19,11 +29,15 @@ function locateRoom(text) {
   const low = text.toLowerCase();
   if (low.includes("баа") || low.includes("большая академическая")) {
     return { building: "main", floor: 2, room: "БАА", planId: "main-2",
-             note: "Большая академическая аудитория — вход из главного (1) корпуса" };
+             note: L3("Большая академическая аудитория — вход из главного (1) корпуса",
+                      "Great Academic Hall, entrance from the main building (Building 1)",
+                      "Grand amphithéâtre, entrée par le bâtiment principal (bâtiment 1)") };
   }
   if (low.includes("спортзал") || low.includes("спортивный зал")) {
     return { building: "k2", floor: 0, room: text, planId: "k2-0",
-             note: "Спортзалы № 1–3 — в цокольном этаже 2 корпуса" };
+             note: L3("Спортзалы № 1–3 — в цокольном этаже 2 корпуса",
+                      "Gyms 1–3 are on the lower ground floor of Building 2",
+                      "Les gymnases 1 à 3 se trouvent au demi-sous-sol du bâtiment 2") };
   }
   const m = text.trim().match(/^(\d{3,4})\s*(?:([а-яёa-z])(?![а-яёa-z])|([-/]\s*\d{1,2}))?/i);
   if (!m) return null;
@@ -50,7 +64,18 @@ function findMark(rooms, room) {
   return rooms[key] || rooms[key.replace(/[-/].*$/, "")] || rooms[key.replace(/[А-Я]$/, "")] || null;
 }
 
+// этаж по-русски / по-английски (1st floor = уровень земли) / по-французски (1 этаж = rez-de-chaussée)
 function floorLabel(floor) {
   if (floor === null || floor === undefined) return "";
+  if (LANG === "en") {
+    if (floor === 0) return "lower ground floor";
+    const suf = floor % 100 >= 11 && floor % 100 <= 13 ? "th" : ({ 1: "st", 2: "nd", 3: "rd" }[floor % 10] || "th");
+    return `${floor}${suf} floor`;
+  }
+  if (LANG === "fr") {
+    if (floor === 0) return "demi-sous-sol";
+    if (floor === 1) return "rez-de-chaussée";
+    return floor === 2 ? "1er étage" : `${floor - 1}e étage`;
+  }
   return floor === 0 ? "цокольный этаж" : `${floor} этаж`;
 }

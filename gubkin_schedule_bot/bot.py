@@ -32,11 +32,13 @@ from zoneinfo import ZoneInfo
 
 from telegram import (InlineKeyboardButton, InlineKeyboardMarkup, InputFile, KeyboardButton,
                       ReplyKeyboardMarkup, Update, WebAppInfo)
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, TypeHandler, filters
+from telegram.ext import (Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler,
+                          TypeHandler, filters)
 
+import i18n
 import my_commands as my
 from gubkin_api import CaptchaRequired, GubkinClient, GubkinError
-from schedule import (MONTHS, _minutes, fetch_range, locate_room, semester_bounds, to_csv, to_html, to_ics,
+from schedule import (_minutes, fetch_range, locate_room, semester_bounds, to_csv, to_html, to_ics,
                       to_json, to_text)
 
 MSK = ZoneInfo("Europe/Moscow")
@@ -63,6 +65,7 @@ HELP = (
     "/today — на сегодня\n"
     "/tomorrow — на завтра\n"
     "/week — текущая неделя\n"
+    "/settings — язык"
 )
 
 
@@ -99,7 +102,13 @@ def _fetch(start: dt.date, end: dt.date):
         return lessons, client.stale
 
 
+def _lang(update: Update) -> str:
+    """Язык пользователя (выбирается в /settings)."""
+    return i18n.get_lang(update.effective_user.id) if update.effective_user else "ru"
+
+
 async def _run(update: Update, start: dt.date, end: dt.date):
+    lang = _lang(update)
     try:
         await update.effective_chat.send_action("typing")  # «печатает…», пока грузим с сайта
     except Exception:
@@ -111,35 +120,29 @@ async def _run(update: Update, start: dt.date, end: dt.date):
                  " (из сохранённого, сайт не ответил)" if stale else "")
         if stale and client.offline:
             await update.effective_message.reply_text(
-                f"⚠️ Расписание обновлялось {_ago(client.cache_age())} — ноутбук с sync давно не выходил "
-                "в сеть. Возможны изменения, сверяйтесь с lk.gubkin.ru/schedule.",
-                disable_web_page_preview=True)
+                i18n.t("stale_offline", lang, ago=_ago(client.cache_age(), lang)), disable_web_page_preview=True)
         elif stale:
-            await update.effective_message.reply_text(
-                "⚠️ Сайт Губкина сейчас не отвечает — показываю последнее сохранённое расписание.")
+            await update.effective_message.reply_text(i18n.t("stale_site", lang))
         return lessons
     except CaptchaRequired:
-        await update.effective_message.reply_text("Сайт попросил капчу. Отправьте /captcha и введите код с картинки.")
+        await update.effective_message.reply_text(i18n.t("captcha_needed", lang))
     except (GubkinError, OSError) as e:
         log.exception("fetch failed")
         if "timed out" in str(e).lower() or "connect" in str(e).lower():
-            msg = ("⏳ Сайт Губкина не отвечает.\n\n"
-                   "Если на компьютере с ботом включён VPN — сайт может не открываться через него. "
-                   "Попробуйте позже или настройте VPN так, чтобы российские сайты шли напрямую.")
+            msg = i18n.t("site_down", lang)
         else:
-            msg = f"Не удалось получить расписание: {e}"
+            msg = i18n.t("fetch_failed", lang, e=e)
         await update.effective_message.reply_text(msg)
     return None
 
 
-def _ago(seconds: float | None) -> str:
+def _ago(seconds: float | None, lang: str = "ru") -> str:
     if seconds is None:
-        return "давно"
+        return i18n.t("long_ago", lang)
     hours = int(seconds // 3600)
     if hours < 24:
-        return f"{hours} ч назад"
-    days = hours // 24
-    return f"{days} {'день' if days % 10 == 1 and days % 100 != 11 else 'дня' if 2 <= days % 10 <= 4 and not 12 <= days % 100 <= 14 else 'дней'} назад"
+        return i18n.t("ago_hours", lang, n=hours)
+    return i18n.days_ago(hours // 24, lang)
 
 
 def _split(text: str) -> list[str]:
@@ -153,56 +156,94 @@ def _split(text: str) -> list[str]:
 
 
 async def _send_text(update: Update, text: str, html: bool = False) -> None:
+    kb = keyboard(_lang(update))
     for part in _split(text):
-        await update.effective_message.reply_text(part, parse_mode="HTML" if html else None,
-                                                  reply_markup=KEYBOARD)
+        await update.effective_message.reply_text(part, parse_mode="HTML" if html else None, reply_markup=kb)
 
 
 def _today() -> dt.date:
     return dt.datetime.now(MSK).date()
 
 
-async def _show(update: Update, start: dt.date, end: dt.date, empty: str) -> None:
+async def _show(update: Update, start: dt.date, end: dt.date, empty_key: str) -> None:
     lessons = await _run(update, start, end)
     if lessons is not None:
-        await _send_text(update, to_html(lessons, empty, today=_today()), html=True)
+        lang = _lang(update)
+        await _send_text(update, to_html(lessons, i18n.t(empty_key, lang), today=_today(), lang=lang), html=True)
 
 
-# Кнопки внизу чата: текст кнопки -> имя функции-команды
+# Кнопки внизу чата: ключ текста кнопки (i18n.TEXT) -> имя функции-команды
 BUTTONS = [
-    [("📅 Сегодня", "cmd_today"), ("➡️ Завтра", "cmd_tomorrow")],
-    [("🗓 Неделя", "cmd_week"), ("⏭ След. неделя", "cmd_next")],
-    [("🗺 Где пара", "cmd_map")],
+    [("btn_today", "cmd_today"), ("btn_tomorrow", "cmd_tomorrow")],
+    [("btn_week", "cmd_week"), ("btn_next", "cmd_next")],
+    [("btn_map", "cmd_map"), ("btn_settings", "cmd_settings")],
 ]
-KEYBOARD = ReplyKeyboardMarkup([[KeyboardButton(text) for text, _ in row] for row in BUTTONS],
+# текст кнопки на любом языке -> команда (кнопки старой клавиатуры тоже работают)
+BUTTON_ACTIONS = {i18n.t(key, lang): func for row in BUTTONS for key, func in row for lang in i18n.LANGS}
+
+
+def keyboard(lang: str = "ru") -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup([[KeyboardButton(i18n.t(key, lang)) for key, _ in row] for row in BUTTONS],
                                resize_keyboard=True)
 
 
-# предупреждение: бот в разработке (показывается при /start)
-BETA_NOTE = (
-    "\n\n⚠️ Бот и карта аудиторий ещё в разработке. Возможны ошибки в расписании и на карте — "
-    "не опирайтесь на них полностью и сверяйтесь с официальным расписанием: lk.gubkin.ru/schedule"
-)
+KEYBOARD = keyboard("ru")
+
+
+def help_text(lang: str) -> str:
+    return HELP if lang == "ru" else i18n.t("help", lang, group=GROUP_CODE)
 
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.effective_message.reply_text(HELP + BETA_NOTE, reply_markup=KEYBOARD,
-                                              disable_web_page_preview=True)
+    lang = _lang(update)
+    await update.effective_message.reply_text(help_text(lang) + "\n\n" + i18n.t("beta", lang),
+                                              reply_markup=keyboard(lang), disable_web_page_preview=True)
+
+
+# ---- настройки: язык
+
+def _settings_markup(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton(("• " if code == lang else "") + name, callback_data=f"lang:{code}")
+        for code, name in i18n.LANG_NAMES.items()]])
+
+
+async def cmd_settings(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    lang = _lang(update)
+    await update.effective_message.reply_text(i18n.t("settings", lang, name=i18n.LANG_NAMES[lang]),
+                                              parse_mode="HTML", reply_markup=_settings_markup(lang))
+
+
+async def on_lang(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    q = update.callback_query
+    lang = (q.data or "").split(":", 1)[-1]
+    if lang not in i18n.LANGS:
+        await q.answer()
+        return
+    i18n.set_lang(update.effective_user.id, lang)
+    await q.answer(i18n.t("lang_set", lang))
+    try:
+        await q.edit_message_text(i18n.t("settings", lang, name=i18n.LANG_NAMES[lang]), parse_mode="HTML",
+                                  reply_markup=_settings_markup(lang))
+    except Exception:  # сообщение не изменилось
+        pass
+    # новая клавиатура внизу чата — уже на выбранном языке
+    await update.effective_message.reply_text(i18n.t("lang_set", lang), reply_markup=keyboard(lang))
 
 
 async def cmd_today(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     d = _today()
-    await _show(update, d, d, "Сегодня занятий нет 🎉")
+    await _show(update, d, d, "empty_today")
 
 
 async def cmd_tomorrow(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     d = _today() + dt.timedelta(days=1)
-    await _show(update, d, d, "Завтра занятий нет 🎉")
+    await _show(update, d, d, "empty_tomorrow")
 
 
 async def cmd_week(update: Update, ctx: ContextTypes.DEFAULT_TYPE, shift: int = 0) -> None:
     mon = _today() - dt.timedelta(days=_today().weekday()) + dt.timedelta(weeks=shift)
-    await _show(update, mon, mon + dt.timedelta(days=6), "На этой неделе занятий нет")
+    await _show(update, mon, mon + dt.timedelta(days=6), "empty_week")
 
 
 async def cmd_next(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -213,9 +254,9 @@ async def cmd_date(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         d = dt.datetime.strptime(ctx.args[0], "%d.%m.%Y").date()
     except (IndexError, ValueError):
-        await update.effective_message.reply_text("Формат: /date 15.10.2026")
+        await update.effective_message.reply_text(i18n.t("date_usage", _lang(update)))
         return
-    await _show(update, d, d, "В этот день занятий нет")
+    await _show(update, d, d, "empty_day")
 
 
 async def cmd_all(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -253,14 +294,14 @@ async def cmd_captcha(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     text = (update.effective_message.text or "").strip()
-    for row in BUTTONS:  # нажата кнопка — выполняем соответствующую команду
-        for label, func_name in row:
-            if text == label:
-                ctx.user_data.pop("captcha", None)
-                await globals()[func_name](update, ctx)
-                return
+    func_name = BUTTON_ACTIONS.get(text)  # нажата кнопка — выполняем соответствующую команду
+    if func_name:
+        ctx.user_data.pop("captcha", None)
+        await globals()[func_name](update, ctx)
+        return
     if not ctx.user_data.pop("captcha", False):
-        await update.effective_message.reply_text(HELP, reply_markup=KEYBOARD)
+        lang = _lang(update)
+        await update.effective_message.reply_text(help_text(lang), reply_markup=keyboard(lang))
         return
     try:
         ok = await asyncio.to_thread(_locked, client.validate_captcha, update.effective_message.text)
@@ -279,6 +320,7 @@ DEFAULT_WEBAPP_URL = "https://tawilone.github.io/ton-assets/"
 async def cmd_map(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Где текущая/следующая пара + кнопка, открывающая карту в мини-приложении.
     Пары передаются в адресе страницы — сама страница с сайтом Губкина не общается."""
+    lang = _lang(update)
     now = dt.datetime.now(MSK)
     now_min = now.hour * 60 + now.minute
     day = _today()
@@ -294,26 +336,28 @@ async def cmd_map(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         lessons = [l for l in lessons if not l.cancelled]
         now_min = -1
     if not lessons:
-        await update.effective_message.reply_text("Ни сегодня, ни завтра пар нет 🎉")
+        await update.effective_message.reply_text(i18n.t("no_classes_2days", lang))
         return
 
     current = next((l for l in lessons if _minutes(l.start) <= now_min < _minutes(l.end or l.start)), None)
     upcoming = next((l for l in lessons if _minutes(l.start) > now_min), None)
     lines = []
-    for title, l in (("🔴 Сейчас", current), ("⏭ Следующая", upcoming)):
+    colon = i18n.NBSP + ":" if lang == "fr" else ":"
+    for key, l in (("now", current), ("next", upcoming)):
         if l:
-            where = f"ауд. {l.room}" if l.room else "аудитория не указана"
-            place = locate_room(l.room)
-            lines.append(f"{title}: {l.start}–{l.end} {l.subject}\n    {where}" + (f" — {place}" if place else ""))
-    when = "Сегодня" if day == _today() else "Завтра"
-    title = f"{when}, {day.day} {MONTHS[day.month - 1]}"
+            where = i18n.t("room", lang, room=l.room) if l.room else i18n.t("no_room", lang)
+            place = locate_room(l.room, lang)
+            lines.append(f"{i18n.t(key, lang)}{colon} {l.start}–{l.end} {i18n.subject(l.subject, lang)}\n    {where}"
+                         + (f" — {place}" if place else ""))
+    title = i18n.t("today_title" if day == _today() else "tomorrow_title", lang, date=i18n.day_month(day, lang))
 
-    payload = [[l.start, l.end, l.room, l.subject[:60], l.kind] for l in lessons]
+    payload = [[l.start, l.end, l.room, i18n.subject(l.subject, lang)[:60], i18n.kind(l.kind, lang)]
+               for l in lessons]
     url = (os.environ.get("WEBAPP_URL") or _read_setting("webapp.txt") or DEFAULT_WEBAPP_URL) + "?" + urlencode(
-        {"d": title, "l": json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+        {"d": title, "l": json.dumps(payload, ensure_ascii=False, separators=(",", ":")), "lg": lang,
          "v": int(time.time() // 300)})  # новый адрес раз в 5 минут — Telegram не держит старую версию страницы
-    button = InlineKeyboardMarkup([[InlineKeyboardButton("🗺 Открыть карту", web_app=WebAppInfo(url))]])
-    note = "\n\n⚠️ Карта ещё находится в разработке и может быть неточной."
+    button = InlineKeyboardMarkup([[InlineKeyboardButton(i18n.t("open_map", lang), web_app=WebAppInfo(url))]])
+    note = "\n\n" + i18n.t("map_note", lang)
     await update.effective_message.reply_text(("\n".join(lines) or title) + note, reply_markup=button)
 
 
@@ -334,16 +378,14 @@ async def cmd_subscribe(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     ids = _load_subscribers()
     ids.add(update.effective_chat.id)
     _save_subscribers(ids)
-    await update.effective_message.reply_text(
-        f"Готово! Каждое утро в {MORNING:%H:%M} пришлю расписание на день (если есть пары). "
-        "Отписаться — /unsubscribe")
+    await update.effective_message.reply_text(i18n.t("subscribed", _lang(update), time=f"{MORNING:%H:%M}"))
 
 
 async def cmd_unsubscribe(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     ids = _load_subscribers()
     ids.discard(update.effective_chat.id)
     _save_subscribers(ids)
-    await update.effective_message.reply_text("Вы отписались от утренней рассылки.")
+    await update.effective_message.reply_text(i18n.t("unsubscribed", _lang(update)))
 
 
 async def morning_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -358,10 +400,13 @@ async def morning_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     if not lessons:  # в выходной не беспокоим
         return
-    text = "Доброе утро! ☀️ Расписание на сегодня:\n\n" + to_html(lessons, today=d)
+    texts = {}
     for chat_id in ids:
+        lang = i18n.get_lang(chat_id)  # в личном чате id чата = id пользователя
+        if lang not in texts:
+            texts[lang] = i18n.t("morning", lang) + "\n\n" + to_html(lessons, today=d, lang=lang)
         try:
-            for part in _split(text):
+            for part in _split(texts[lang]):
                 await ctx.bot.send_message(chat_id, part, parse_mode="HTML")
         except Exception:  # пользователь заблокировал бота и т. п.
             log.warning("cannot send to %s", chat_id)
@@ -574,6 +619,29 @@ async def cmd_users(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await update.effective_message.reply_text(part, parse_mode="HTML")
 
 
+async def cmd_untranslated(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Для администратора: предметы из расписания, которых ещё нет в словаре переводов (i18n.SUBJECTS)."""
+    if update.effective_user.id != _admin_id():
+        await update.effective_message.reply_text("Эта команда только для администратора.")
+        return
+    from schedule import parse_week
+    names = set()
+    with _lock:
+        for (_, gid), (_, data) in list(client._cache.items()):
+            try:
+                names.update(l.subject for l in parse_week(data, gid, _group.get("code") or ""))
+            except Exception:
+                continue
+    missing = sorted(n for n in names if n and not i18n.has_subject(n))
+    if not names:
+        text = "Расписание ещё не загружено — сначала откройте «Неделя»."
+    elif not missing:
+        text = f"✅ Все предметы переведены ({len(names)})."
+    else:
+        text = "Нет перевода (пришлите этот список — добавлю в словарь):\n\n" + "\n".join(f"• {n}" for n in missing)
+    await _send_text(update, text)
+
+
 def _read_setting(name: str) -> str | None:
     """Первая непустая строка файла рядом с bot.py (например token.txt), или None."""
     try:
@@ -627,6 +695,9 @@ def main() -> None:
     # group=-1: срабатывает раньше остальных обработчиков на каждое сообщение
     app.add_handler(TypeHandler(Update, track_user), group=-1)
     app.add_handler(CommandHandler(["start", "help"], cmd_start))
+    app.add_handler(CommandHandler(["settings", "language"], cmd_settings))
+    app.add_handler(CallbackQueryHandler(on_lang, pattern=r"^lang:"))
+    app.add_handler(CommandHandler("untranslated", cmd_untranslated))
     app.add_handler(CommandHandler("myid", cmd_myid))
     app.add_handler(CommandHandler("users", cmd_users))
     app.add_handler(CommandHandler("today", cmd_today))

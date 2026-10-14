@@ -22,6 +22,7 @@ import io
 import json
 from dataclasses import asdict, dataclass, field
 
+import i18n
 from gubkin_api import GubkinClient, normalize_code
 
 WEEKDAYS = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
@@ -284,13 +285,11 @@ def _minutes(hhmm: str) -> int:
     return int(h) * 60 + int(m)
 
 
-def break_text(gap: int) -> str:
+def break_text(gap: int, lang: str = "ru") -> str:
     """Строка о перерыве между парами: короткий — перемена, длинный — «окно»."""
     if gap <= 40:
-        return f"  ☕ перемена {gap} мин"
-    h, m = divmod(gap, 60)
-    length = f"{h} ч {m} мин" if h and m else (f"{h} ч" if h else f"{m} мин")
-    return f"  🕐 окно {length}"
+        return "  " + i18n.t("break", lang, n=gap)
+    return "  " + i18n.t("gap", lang, len=i18n.duration(gap, lang))
 
 
 # ---- красивый вид для чата Telegram (HTML-разметка)
@@ -328,42 +327,49 @@ def short_name(full: str) -> str:
     return ", ".join(out)
 
 
-def day_title(date_iso: str, weekday: str, week_type: str = "", today: dt.date | None = None) -> str:
+def day_title(date_iso: str, weekday: str, week_type: str = "", today: dt.date | None = None,
+              lang: str = "ru") -> str:
     d = dt.date.fromisoformat(date_iso)
-    title = f"📅 <b>{weekday}, {d.day} {MONTHS[d.month - 1]}</b>"
+    title = f"📅 <b>{i18n.weekday_date(d, lang, weekday)}</b>"
     if today and d == today:
-        title += " · сегодня"
+        title += " · " + i18n.t("today", lang)
     elif today and d == today + dt.timedelta(days=1):
-        title += " · завтра"
+        title += " · " + i18n.t("tomorrow", lang)
     if week_type:
-        title += f"\n<i>{_esc(week_type)} неделя</i>"
+        wt = {"верхняя": "week_upper", "нижняя": "week_lower"}.get(week_type)
+        if lang == "ru" or not wt:
+            title += f"\n<i>{_esc(week_type)} неделя</i>" if lang == "ru" else ""
+        else:
+            title += f"\n<i>{i18n.t(wt, lang)}</i>"
     return title
 
 
-def format_lesson_html(l: Lesson) -> str:
+def format_lesson_html(l: Lesson, lang: str = "ru") -> str:
     time = f"<b>{l.start}–{l.end}</b>" if l.end else f"<b>{l.start}</b>"
-    subject = f"<b>{_esc(l.subject)}</b>"
+    name = i18n.subject(l.subject, lang)
+    subject = f"<b>{_esc(name)}</b>"
     if l.cancelled:
-        lines = [f"❌ <s>{l.start}–{l.end}  {_esc(l.subject)}</s>", "<i>пара отменена</i>"]
+        lines = [f"❌ <s>{l.start}–{l.end}  {_esc(name)}</s>", f"<i>{i18n.t('cancelled', lang)}</i>"]
     else:
         lines = [f"🕘 {time}", f"{kind_icon(l.kind)} {subject}"]
         info = []
         if l.kind:
-            info.append(_esc(l.kind))
+            info.append(_esc(i18n.kind(l.kind, lang)))
         if l.subgroup:
-            info.append(f"{l.subgroup} подгруппа")
+            info.append(i18n.t("subgroup", lang, n=l.subgroup))
         if l.room:
-            info.append(f"ауд. <b>{_esc(l.room)}</b>")
+            info.append(i18n.t("room", lang, room=f"<b>{_esc(l.room)}</b>"))
         if info:
             lines.append("      " + " · ".join(info))
         if l.teacher:
             lines.append(f"      👤 {_esc(short_name(l.teacher))}")
     for n in l.notes:
-        lines.append(f"      ⚠️ <i>{_esc(n)}</i>")
+        lines.append(f"      ⚠️ <i>{_esc(i18n.note(n, lang))}</i>")
     return "\n".join(lines)
 
 
-def to_html(lessons: list[Lesson], empty: str = "Занятий нет", today: dt.date | None = None) -> str:
+def to_html(lessons: list[Lesson], empty: str = "Занятий нет", today: dt.date | None = None,
+            lang: str = "ru") -> str:
     """Расписание для чата: заголовок дня, пары блоками, перемены между ними.
     Каждая строка — законченный HTML (теги не переходят на следующую строку),
     поэтому длинный текст можно резать по переносам строк."""
@@ -375,11 +381,11 @@ def to_html(lessons: list[Lesson], empty: str = "Занятий нет", today: 
             if cur is not None:
                 out += ["", "━━━━━━━━━━━━━━", ""]
             cur, prev_end = l.date, None
-            out += [day_title(l.date, l.weekday, l.week_type, today), ""]
+            out += [day_title(l.date, l.weekday, l.week_type, today, lang), ""]
         else:
             gap = _minutes(l.start) - prev_end if prev_end is not None and not l.cancelled else 0
-            out += ["", f"<i>{break_text(gap).strip()}</i>", ""] if gap > 0 else [""]
-        out.append(format_lesson_html(l))
+            out += ["", f"<i>{break_text(gap, lang).strip()}</i>", ""] if gap > 0 else [""]
+        out.append(format_lesson_html(l, lang))
         if not l.cancelled and l.end:
             prev_end = max(prev_end or 0, _minutes(l.end))
     return "\n".join(out).strip()
@@ -387,24 +393,9 @@ def to_html(lessons: list[Lesson], empty: str = "Занятий нет", today: 
 
 # ---- где находится аудитория (как docs/campus.js)
 
-BUILDING_NAMES = {"main": "Главный корпус", "k2": "2 корпус", "k3": "3 корпус", "lib": "Библиотека"}
+BUILDING_NAMES = {b: names["ru"] for b, names in i18n.BUILDINGS.items()}
 
 
-def locate_room(room: str) -> str:
+def locate_room(room: str, lang: str = "ru") -> str:
     """'2435' -> '3 корпус, 4 этаж'. Нумерация — по путеводителю первокурсника."""
-    import re
-    low = (room or "").lower()
-    if "баа" in low:
-        return "Главный корпус, Большая академическая аудитория"
-    m = re.match(r"\s*(\d{3,4})", room or "")
-    if not m:
-        return ""
-    d = m.group(1)
-    if len(d) == 3:
-        building, floor = "main", int(d[0])
-    else:
-        building = {"1": "k2", "2": "k3", "5": "lib"}.get(d[0])
-        floor = int(d[1])
-    if not building:
-        return ""
-    return f"{BUILDING_NAMES[building]}, " + ("цокольный этаж" if floor == 0 else f"{floor} этаж")
+    return i18n.locate_room(room, lang)
