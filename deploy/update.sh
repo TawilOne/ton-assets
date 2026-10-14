@@ -10,7 +10,9 @@ git -C "$DIR" reset -q --hard "origin/$BRANCH"     # token.txt, admin.txt, users
 chown -R gubkin: "$DIR/gubkin_schedule_bot"
 install -m 644 "$DIR"/deploy/gubkin-{proxy,bot,reproxy}.service "$DIR/deploy/gubkin-reproxy.timer" /etc/systemd/system/
 systemctl daemon-reload
-if [ -s /etc/gubkin-bot/vpnkey ] && [ ! -e /etc/systemd/system/gubkin-bot.service.d/direct.conf ]; then
+D=/etc/systemd/system/gubkin-bot.service.d
+# VPN-прокси нужен, только если бот не работает напрямую и не через пересыльщик (relay.sh)
+if [ -s /etc/gubkin-bot/vpnkey ] && [ ! -e "$D/direct.conf" ] && [ ! -e "$D/relay.conf" ]; then
   systemctl enable -q --now gubkin-reproxy.timer
   bash "$DIR/deploy/reproxy.sh"   # заново проверить серверы подписки
 fi
