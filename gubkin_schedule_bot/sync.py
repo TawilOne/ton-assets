@@ -62,8 +62,9 @@ def ssh(args: list[str], data: bytes | None = None, batch: bool = True, timeout:
     opts = ["-o", "ConnectTimeout=20", "-o", "StrictHostKeyChecking=accept-new"]
     if batch:
         opts += ["-o", "BatchMode=yes"]  # без вопросов: только по ключу
+    # скрытое окно — только для тихой работы: иначе запрос пароля уйдёт в невидимое окно
     return subprocess.run(["ssh", *opts, *args], input=data, capture_output=batch, timeout=timeout,
-                          creationflags=NO_WINDOW)
+                          creationflags=NO_WINDOW if batch else 0)
 
 
 def put(srv: str, name: str, data: bytes) -> None:
