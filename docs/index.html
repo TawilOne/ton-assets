@@ -114,13 +114,17 @@
                 background: var(--red); padding: 2px 7px; border-radius: 7px; z-index: 2;
                 box-shadow: 0 4px 14px rgba(255,0,0,.5); }
   .map.zoom .lbl.target { font-size: 14px; }
-  .floor-tabs { display: flex; gap: 6px; margin: 0 0 12px; overflow-x: auto; scrollbar-width: none; }
-  .floor-tabs::-webkit-scrollbar { display: none; }
-  .ftab { flex: 1 0 34px; height: 34px; border-radius: 11px; border: 1px solid var(--line); background: var(--surface-2);
-          color: var(--muted); font: 600 14px Inter, system-ui, sans-serif; position: relative; }
-  .ftab.on { background: #fff; color: #000; border-color: #fff; }
-  .ftab.here::after { content: ""; position: absolute; top: 4px; right: 4px; width: 6px; height: 6px; border-radius: 50%;
-                      background: var(--red); box-shadow: 0 0 6px rgba(255,0,0,.8); }
+  /* кнопки этажей — компактной колонкой слева от карты */
+  .map-wrap.has-floors { display: flex; align-items: center; gap: 8px; }
+  .map-wrap.has-floors .map { flex: 1; min-width: 0; }
+  .floor-tabs { flex: none; display: flex; flex-direction: column; gap: 2px; padding: 3px; border-radius: 11px;
+                background: var(--surface-2); border: 1px solid var(--line); }
+  .ftab { -webkit-appearance: none; appearance: none; display: block; width: 26px; height: 20px; border-radius: 7px;
+          border: 0; margin: 0; padding: 0; background: transparent; color: var(--muted);
+          font: 600 12px/20px Inter, system-ui, sans-serif; text-align: center; position: relative; }
+  .ftab.on { background: #fff; color: #000; }
+  .ftab.here::after { content: ""; position: absolute; top: 2px; right: 1px; width: 5px; height: 5px; border-radius: 50%;
+                      background: var(--red); box-shadow: 0 0 5px rgba(255,0,0,.8); }
   .back-floor { color: var(--red); text-decoration: none; font-weight: 600; }
   .zoom-btn { position: absolute; right: 10px; bottom: 10px; width: 36px; height: 36px; border-radius: 12px;
               border: 1px solid var(--line); background: rgba(23,23,26,.85); color: var(--text); font-size: 17px;
@@ -323,6 +327,7 @@ let viewFloor = null;
 function floorTabs(building, shown, target) {
   const ids = Object.keys(plans).filter(k => k.startsWith(building + "-")).map(k => +k.split("-")[1])
     .filter(n => !isNaN(n)).sort((a, b) => b - a);
+  if (ids.length < 2 && building === "main") ids.splice(0, ids.length, 8, 7, 6, 5, 4, 3, 2, 1);
   if (ids.length < 2) return "";
   return `<div class="floor-tabs" role="tablist">${ids.map(n =>
     `<button class="ftab ${n === shown ? "on" : ""} ${n === target ? "here" : ""}" data-floor="${n}">${n}</button>`).join("")}</div>`;
@@ -348,10 +353,10 @@ function planHTML(loc) {
     // у верхнего края карты ярлык не поместится над точкой — ставим его под точкой
     const below = mark && mark.y < 0.15 ? ";transform:translate(-50%,90%)" : "";
     const labels = mark ? `<span class="lbl target" style="left:${mark.x * 100}%;top:${mark.y * 100}%${below}">${esc(targetKey)}</span>` : "";
+    const tabs = floorTabs(building, shownFloor, targetFloor);
     const away = onTarget ? "" : `<div class="empty-note">Пара — ${esc(floorLabel(targetFloor))}. <a href="#" class="back-floor">Вернуться</a></div>`;
     return `<div class="card fade"><div class="section-title"><h2>План этажа</h2><span>${esc(where)}</span></div>
-      ${floorTabs(building, shownFloor, targetFloor)}
-      <div class="map-wrap"><div class="map ${zoomed ? "zoom" : ""}" id="map"><div class="map-inner">
+      <div class="map-wrap ${tabs ? "has-floors" : ""}">${tabs}<div class="map ${zoomed ? "zoom" : ""}" id="map"><div class="map-inner">
         ${svgCache[planId]}${labels}
         ${mark ? `<div class="dot" id="dot" style="left:${mark.x * 100}%;top:${mark.y * 100}%"></div>` : ""}
       </div></div><button class="zoom-btn" id="zoom" aria-label="Увеличить">${zoomed ? "−" : "+"}</button></div>
