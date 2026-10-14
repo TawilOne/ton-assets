@@ -12,6 +12,8 @@
                     Сайт Губкина при этом открывается напрямую.
     TG_API_BASE   — адрес пересыльщика Bot API (например https://имя.workers.dev),
                     если Telegram заблокирован, а VPN нет (файл tg_api.txt — то же самое).
+    GUBKIN_OFFLINE=1 — на сайт не ходить, брать расписание из cache.json, который присылает
+                    ноутбук (sync.py): для сервера, которого сайт Губкина не пускает.
 """
 
 from __future__ import annotations
@@ -48,7 +50,8 @@ log = logging.getLogger("gubkin-bot")
 DATA_DIR = pathlib.Path(__file__).resolve().parent
 client = GubkinClient(cookie_file=str(DATA_DIR / "cookies.json"), cache_file=str(DATA_DIR / "cache.json"),
                       fallback_proxy=os.environ.get("GUBKIN_PROXY"),  # запасной путь к сайту, если напрямую не пускает
-                      proxy=os.environ.get("GUBKIN_PROXY_ALWAYS"))  # на сервере: всегда через прокси
+                      proxy=os.environ.get("GUBKIN_PROXY_ALWAYS"),  # на сервере: всегда через прокси
+                      offline=os.environ.get("GUBKIN_OFFLINE") == "1")  # расписание присылает ноутбук (sync.py)
 GROUP_FILE = DATA_DIR / "group.json"
 USERS_FILE = DATA_DIR / "users.json"  # кто пользуется ботом (видно только администратору)
 _users_lock = threading.Lock()
@@ -118,7 +121,12 @@ async def _run(update: Update, start: dt.date, end: dt.date):
         lessons, stale = await asyncio.to_thread(_fetch, start, end)
         log.info("schedule %s..%s loaded in %.1f s%s", start, end, time.monotonic() - t0,
                  " (из сохранённого, сайт не ответил)" if stale else "")
-        if stale:
+        if stale and client.offline:
+            await update.effective_message.reply_text(
+                f"⚠️ Расписание обновлялось {_ago(client.cache_age())} — ноутбук с sync давно не выходил "
+                "в сеть. Возможны изменения, сверяйтесь с lk.gubkin.ru/schedule.",
+                disable_web_page_preview=True)
+        elif stale:
             await update.effective_message.reply_text(
                 "⚠️ Сайт Губкина сейчас не отвечает — показываю последнее сохранённое расписание.")
         return lessons
@@ -134,6 +142,16 @@ async def _run(update: Update, start: dt.date, end: dt.date):
             msg = f"Не удалось получить расписание: {e}"
         await update.effective_message.reply_text(msg)
     return None
+
+
+def _ago(seconds: float | None) -> str:
+    if seconds is None:
+        return "давно"
+    hours = int(seconds // 3600)
+    if hours < 24:
+        return f"{hours} ч назад"
+    days = hours // 24
+    return f"{days} {'день' if days % 10 == 1 and days % 100 != 11 else 'дня' if 2 <= days % 10 <= 4 and not 12 <= days % 100 <= 14 else 'дней'} назад"
 
 
 def _split(text: str) -> list[str]:
@@ -371,6 +389,37 @@ async def prefetch_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         log.warning("prefetch failed: %s", e)
 
 
+SYNC_STATUS_FILE = DATA_DIR / "sync_status.json"
+
+
+async def sync_watch_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Только для offline-сервера: следит за тем, как ноутбук присылает расписание (sync.py),
+    и пишет администратору, если нужна капча или расписание давно не обновлялось."""
+    admin = _admin_id()
+    if not admin:
+        return
+    try:
+        st = json.loads(SYNC_STATUS_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        st = {}
+    state = ctx.bot_data.setdefault("sync_watch", {})
+    msg, key = None, None
+    if st.get("error") == "captcha":
+        msg, key = ("🔐 Сайт Губкина попросил капчу у ноутбука. Запустите на ноутбуке sync_now.bat "
+                    "и введите код с картинки."), "captcha:" + str(st.get("time"))
+    age = client.cache_age()
+    if not msg and age is not None and age > 48 * 3600:
+        msg = (f"📅 Расписание на сервере обновлялось {_ago(age)}. Включите ноутбук с интернетом "
+               "или запустите sync_now.bat.")
+        key = "old:" + dt.date.today().isoformat()  # не чаще раза в день
+    if msg and state.get("last") != key:
+        state["last"] = key
+        try:
+            await ctx.bot.send_message(admin, msg)
+        except Exception as e:
+            log.warning("sync watch: не удалось написать администратору: %s", e)
+
+
 # ---- команды из заданий (my_commands.py)
 
 NOT_DONE = "🛠 Эта команда ещё не готова — допишите функцию {} в файле my_commands.py"
@@ -601,7 +650,11 @@ def main() -> None:
     app.add_handler(CommandHandler("free", cmd_free))
     app.job_queue.run_daily(morning_job, time=MORNING)
     # подгрузка расписания при старте и каждые 20 минут (кэш живёт 30 минут)
-    app.job_queue.run_repeating(prefetch_job, interval=20 * 60, first=5)
+    if client.offline:  # сервер: на сайт не ходим, следим за присылаемым расписанием
+        log.info("offline: расписание берётся из cache.json, который присылает ноутбук (sync.py)")
+        app.job_queue.run_repeating(sync_watch_job, interval=15 * 60, first=60)
+    else:
+        app.job_queue.run_repeating(prefetch_job, interval=20 * 60, first=5)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
     # старые сообщения, отправленные, пока бот был выключен, пропускаем —
     # иначе при запуске он долго отвечает на каждое из них

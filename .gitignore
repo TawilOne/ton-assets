@@ -10,3 +10,7 @@ gubkin_schedule_bot/users.json
 gubkin_schedule_bot/admin.txt
 gubkin_schedule_bot/cache.json
 gubkin_schedule_bot/tg_api.txt
+gubkin_schedule_bot/sync_status.json
+gubkin_schedule_bot/sync.log
+gubkin_schedule_bot/captcha.png
+gubkin_schedule_bot/server.txt

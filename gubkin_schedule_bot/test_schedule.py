@@ -3,7 +3,9 @@
 import datetime as dt
 import json
 
-from gubkin_api import GubkinClient, normalize_code
+import pytest
+
+from gubkin_api import GubkinClient, GubkinError, normalize_code
 from schedule import fetch_range, parse_week, semester_bounds, to_csv, to_ics, to_json, to_text
 
 WEEK = {
@@ -168,3 +170,21 @@ def test_stale_cache_when_site_down(monkeypatch, tmp_path):
     import pytest
     with pytest.raises(GubkinError):                           # без кэша — честная ошибка
         GubkinClient(delay=0).week(mon, 777)
+
+
+def test_offline_reads_uploaded_cache(tmp_path):
+    """Сервер в offline-режиме не ходит на сайт и перечитывает cache.json, когда ноутбук его обновил."""
+    import os
+    import time
+    cf = tmp_path / "cache.json"
+    mon = dt.date.today() - dt.timedelta(days=dt.date.today().weekday())
+    cf.write_text(json.dumps({f"{mon.isoformat()}|1": [time.time(), WEEK]}), encoding="utf-8")
+    c = GubkinClient(cache_file=str(cf), offline=True)
+    c._get = lambda *a, **k: pytest.fail("offline-клиент не должен ходить на сайт")
+    assert c.week(dt.date.today(), 1) == WEEK and not c.stale
+    with pytest.raises(GubkinError):
+        c.week(mon + dt.timedelta(weeks=3), 1)
+    cf.write_text(json.dumps({f"{(mon + dt.timedelta(weeks=3)).isoformat()}|1": [time.time(), WEEK]}),
+                  encoding="utf-8")
+    os.utime(cf, (time.time() - 40 * 3600,) * 2)  # прислано давно — бот предупредит
+    assert c.week(mon + dt.timedelta(weeks=3), 1) == WEEK and c.stale

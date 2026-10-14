@@ -44,9 +44,13 @@ class GubkinClient:
     def __init__(self, timeout: float | tuple = (10, 40), delay: float = 0.5,
                  cookie_file: str | None = None, cache_ttl: float = 30 * 60,
                  cache_file: str | None = None, fallback_proxy: str | None = None,
-                 proxy: str | None = None):
+                 proxy: str | None = None, offline: bool = False):
         # если сайт не отвечает напрямую — запасной путь через этот прокси (на час, потом снова напрямую)
         self.fallback_proxy = fallback_proxy
+        # offline: на сайт не ходим вообще, расписание берём только из cache_file,
+        # который присылает ноутбук (sync.py) — для сервера, которого сайт не пускает
+        self.offline = offline
+        self._cache_mtime = 0.0
         self._proxy_until = 0.0
         self.timeout = timeout  # (подключение, ожидание ответа) в секундах
         self.stale = False  # True, если последний ответ взят из сохранённого кэша
@@ -73,6 +77,7 @@ class GubkinClient:
         if not self.cache_file:
             return
         try:
+            self._cache_mtime = self.cache_file.stat().st_mtime
             for k, (ts, data) in json.loads(self.cache_file.read_text(encoding="utf-8")).items():
                 monday, group = k.split("|", 1)
                 self._cache[(dt.date.fromisoformat(monday), group)] = (ts, data)
@@ -189,11 +194,35 @@ class GubkinClient:
         return self._get({"act": "list", "method": "getFacultyGroups",
                           "facultyId": faculty_id}).get("rows") or []
 
+    def cache_age(self) -> float | None:
+        """Сколько секунд назад обновлялся файл кэша (для offline — когда ноутбук присылал расписание)."""
+        try:
+            return time.time() - self.cache_file.stat().st_mtime
+        except (OSError, AttributeError):
+            return None
+
+    def _offline_week(self, key: tuple) -> dict:
+        try:  # ноутбук прислал новый файл — перечитываем
+            if self.cache_file.stat().st_mtime != self._cache_mtime:
+                self._cache.clear()
+                self._load_cache()
+        except OSError:
+            pass
+        hit = self._cache.get(key)
+        if not hit:
+            raise GubkinError("расписания на эту неделю ещё нет на сервере — его присылает ноутбук "
+                              "(sync). Включите ноутбук с интернетом.")
+        if (self.cache_age() or 0) > 36 * 3600:
+            self.stale = True
+        return hit[1]
+
     def week(self, day: dt.date, group_id) -> dict:
         """Сырой ответ за неделю, содержащую day. Неделя кэшируется на cache_ttl секунд,
         чтобы повторные /today не дёргали сайт (частые запросы вызывают капчу)."""
         monday = day - dt.timedelta(days=day.weekday())
         key = (monday, str(group_id))
+        if self.offline:
+            return self._offline_week(key)
         hit = self._cache.get(key)
         this_monday = dt.date.today() - dt.timedelta(days=dt.date.today().weekday())
         # прошедшие недели уже не меняются — их можно помнить дольше (для /stats и /all)
@@ -217,6 +246,8 @@ class GubkinClient:
     def find_group(self, code: str, faculty_hint: str = "геолог") -> tuple[dict, dict]:
         """Ищет группу по коду. Сначала на факультетах, чьё имя содержит faculty_hint,
         затем на всех остальных. Возвращает (факультет, группа)."""
+        if self.offline:
+            raise GubkinError("группа ещё не известна серверу — запустите sync на ноутбуке")
         wanted = normalize_code(code)
         facs = self.faculties()
         hint = faculty_hint.lower()
