@@ -312,8 +312,9 @@ function heroHTML(l, loc, cur, now) {
 let campusSvg = null, campusPts = {};
 fetch("plans/campus.svg?v=" + Date.now()).then(r => r.text()).then(t => { campusSvg = t; lastKey = ""; render(); }).catch(() => {});
 fetch("campus.json", { cache: "no-store" }).then(r => r.json()).then(j => { campusPts = j; lastKey = ""; render(); }).catch(() => {});
+const SHOW_CAMPUS = false;  // карта территории временно скрыта (дорабатывается); true — показать снова
 function campusHTML(loc) {
-  if (!campusSvg || !loc) return "";
+  if (!SHOW_CAMPUS || !campusSvg || !loc) return "";
   const p = campusPts[loc.building];
   const how = loc.note ? `<div class="empty-note">${esc(loc.note)}</div>` : "";
   const miss = p ? "" : `<div class="empty-note">Этот корпус пока не отмечен на карте территории</div>`;
