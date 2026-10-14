@@ -176,9 +176,10 @@ def setup() -> None:
 
     if ssh([srv, "true"]).returncode != 0:
         print("2) Добавляю ключ на сервер — введите ПАРОЛЬ ОТ СЕРВЕРА (символы не видны):")
-        pub = (key.with_suffix(".pub")).read_bytes()
-        r = ssh([srv, "mkdir -p ~/.ssh && chmod 700 ~/.ssh && cat >> ~/.ssh/authorized_keys "
-                      "&& chmod 600 ~/.ssh/authorized_keys"], pub, batch=False)
+        # ключ передаём в самой команде, а не через ввод: иначе ssh в Windows не может спросить пароль
+        pub = key.with_suffix(".pub").read_text(encoding="utf-8").strip().replace("'", "")
+        r = ssh([srv, f"mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo '{pub}' >> ~/.ssh/authorized_keys "
+                      "&& chmod 600 ~/.ssh/authorized_keys"], batch=False)
         if r.returncode != 0 or ssh([srv, "true"]).returncode != 0:
             sys.exit("❌ Не получилось войти на сервер. Проверьте пароль и запустите ещё раз.")
     print("2) Вход на сервер по ключу работает.")
