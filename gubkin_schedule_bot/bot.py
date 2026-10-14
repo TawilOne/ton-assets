@@ -262,9 +262,10 @@ async def cmd_date(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_all(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    lang = _lang(update)
     start, end = semester_bounds(_today())
     msg = await update.effective_message.reply_text(
-        f"Выгружаю расписание {GROUP_CODE} с {start:%d.%m.%Y} по {end:%d.%m.%Y}… это займёт около минуты.")
+        i18n.t("export_wait", lang, group=GROUP_CODE, a=f"{start:%d.%m.%Y}", b=f"{end:%d.%m.%Y}"))
     lessons = await _run(update, start, end)
     if lessons is None:
         return
@@ -273,25 +274,25 @@ async def cmd_all(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     meta = {"group": code, "group_id": _group["id"], "faculty": _group["faculty"],
             "from": str(start), "to": str(end)}
     files = [
-        (f"{stem}.ics", to_ics(lessons, f"Расписание {code}"), "календарь (Google/Apple/Outlook)"),
-        (f"{stem}.csv", to_csv(lessons), "таблица для Excel"),
-        (f"{stem}.json", to_json(lessons, meta), "данные"),
-        (f"{stem}.txt", to_text(lessons), "текст"),
+        (f"{stem}.ics", to_ics(lessons, i18n.t("export_title", lang, group=code)), i18n.t("file_ics", lang)),
+        (f"{stem}.csv", to_csv(lessons), i18n.t("file_csv", lang)),
+        (f"{stem}.json", to_json(lessons, meta), i18n.t("file_json", lang)),
+        (f"{stem}.txt", to_text(lessons), i18n.t("file_txt", lang)),
     ]
     for name, content, caption in files:
         await update.effective_message.reply_document(
             InputFile(io.BytesIO(content.encode("utf-8")), filename=name), caption=caption)
-    await msg.edit_text(f"Готово: {len(lessons)} занятий с {start:%d.%m.%Y} по {end:%d.%m.%Y}.")
+    await msg.edit_text(i18n.t("export_done", lang, n=len(lessons), a=f"{start:%d.%m.%Y}", b=f"{end:%d.%m.%Y}"))
 
 
 async def cmd_captcha(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         img = await asyncio.to_thread(_locked, client.captcha_image)
     except (GubkinError, OSError) as e:
-        await update.effective_message.reply_text(f"Не удалось загрузить капчу: {e}")
+        await update.effective_message.reply_text(i18n.t("captcha_failed", _lang(update), e=e))
         return
     ctx.user_data["captcha"] = True
-    await update.effective_message.reply_photo(img, caption="Введите символы с картинки ответным сообщением")
+    await update.effective_message.reply_photo(img, caption=i18n.t("captcha_prompt", _lang(update)))
 
 
 async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -310,8 +311,7 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     except (GubkinError, OSError) as e:
         await update.effective_message.reply_text(str(e))
         return
-    await update.effective_message.reply_text(
-        "Капча принята ✅ Повторите команду." if ok else "Неверно. Отправьте /captcha ещё раз.")
+    await update.effective_message.reply_text(i18n.t("captcha_ok" if ok else "captcha_bad", _lang(update)))
 
 
 # ---- мини-приложение с картой («Где пара»)
@@ -676,13 +676,30 @@ COMMANDS = {  # меню команд Telegram (кнопка «Меню» сле
 }
 
 
+# имя и описание бота для тех, у кого Telegram на английском/французском (русские — из BotFather)
+BOT_PROFILE = {
+    "en": ("Gubkin Timetable (Beta)", "Gubkin University timetable for group {g}, with a map showing where your class is.",
+           "Gubkin University timetable for group {g}: today, tomorrow, this week, and a floor map with the room "
+           "of your class. The bot is in beta, so check the official timetable too."),
+    "fr": ("Emploi du temps Gubkin (bêta)", "Emploi du temps de l'Université Gubkin, groupe {g}, avec le plan "
+           "de la salle de cours.",
+           "Emploi du temps de l'Université Gubkin pour le groupe {g}\u00a0: aujourd'hui, demain, cette semaine, "
+           "et un plan de l'étage avec la salle de votre cours. Le bot est en version bêta\u00a0: vérifiez "
+           "aussi l'emploi du temps officiel."),
+}
+
+
 async def _set_commands(app: Application) -> None:
     from telegram import BotCommand
     try:
         for lang, cmds in COMMANDS.items():
             await app.bot.set_my_commands([BotCommand(c, d) for c, d in cmds],
                                           language_code=None if lang == "ru" else lang)
-    except Exception as e:  # меню — не главное, бот работает и без него
+        for lang, (name, short, desc) in BOT_PROFILE.items():
+            await app.bot.set_my_name(name, language_code=lang)
+            await app.bot.set_my_short_description(short.format(g=GROUP_CODE), language_code=lang)
+            await app.bot.set_my_description(desc.format(g=GROUP_CODE), language_code=lang)
+    except Exception as e:  # меню и описание — не главное, бот работает и без них
         log.warning("set_my_commands: %s", e)
 
 
