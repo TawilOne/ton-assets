@@ -176,10 +176,12 @@ async def _show(update: Update, start: dt.date, end: dt.date, empty_key: str) ->
 BUTTONS = [
     [("btn_today", "cmd_today"), ("btn_tomorrow", "cmd_tomorrow")],
     [("btn_week", "cmd_week"), ("btn_next", "cmd_next")],
-    [("btn_map", "cmd_map"), ("btn_settings", "cmd_settings")],
+    [("btn_map", "cmd_map")],  # карта — главная кнопка, одна во всю ширину
 ]
+# настройки — не в нижней панели, а в меню команд Telegram (кнопка «Меню») и командой /settings;
 # текст кнопки на любом языке -> команда (кнопки старой клавиатуры тоже работают)
-BUTTON_ACTIONS = {i18n.t(key, lang): func for row in BUTTONS for key, func in row for lang in i18n.LANGS}
+BUTTON_ACTIONS = {i18n.t(key, lang): func for row in BUTTONS + [[("btn_settings", "cmd_settings")]]
+                  for key, func in row for lang in i18n.LANGS}
 
 
 def keyboard(lang: str = "ru") -> ReplyKeyboardMarkup:
@@ -666,6 +668,24 @@ class _ShortNetworkErrors(logging.Filter):
         return True
 
 
+COMMANDS = {  # меню команд Telegram (кнопка «Меню» слева от поля ввода) — на языке приложения Telegram
+    "ru": [("today", "Сегодня"), ("tomorrow", "Завтра"), ("week", "Неделя"), ("settings", "Настройки и язык")],
+    "en": [("today", "Today"), ("tomorrow", "Tomorrow"), ("week", "This week"), ("settings", "Settings and language")],
+    "fr": [("today", "Aujourd'hui"), ("tomorrow", "Demain"), ("week", "Cette semaine"),
+           ("settings", "Paramètres et langue")],
+}
+
+
+async def _set_commands(app: Application) -> None:
+    from telegram import BotCommand
+    try:
+        for lang, cmds in COMMANDS.items():
+            await app.bot.set_my_commands([BotCommand(c, d) for c, d in cmds],
+                                          language_code=None if lang == "ru" else lang)
+    except Exception as e:  # меню — не главное, бот работает и без него
+        log.warning("set_my_commands: %s", e)
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     for h in logging.getLogger().handlers:
@@ -691,7 +711,7 @@ def main() -> None:
     elif proxy:
         builder = builder.proxy(proxy).get_updates_proxy(proxy)
         log.info("Telegram via proxy %s", proxy.split("@")[-1])
-    app = builder.build()
+    app = builder.post_init(_set_commands).build()
     # group=-1: срабатывает раньше остальных обработчиков на каждое сообщение
     app.add_handler(TypeHandler(Update, track_user), group=-1)
     app.add_handler(CommandHandler(["start", "help"], cmd_start))
