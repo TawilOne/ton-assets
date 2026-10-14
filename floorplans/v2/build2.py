@@ -29,6 +29,10 @@ OVERRIDE = {
 }
 
 
+def seg_key(rect):
+    return ",".join(f"{v:.1f}" for v in rect)
+
+
 def isotonic(t):
     """Неубывающая последовательность, ближайшая к t (алгоритм PAVA)."""
     blocks = []
@@ -90,6 +94,58 @@ def free_segments(row, fixed):
     return [s for s in segs if s[1] - s[0] > 1]
 
 
+WALLS_FILE = HERE / "walls.json"
+WALLS = json.loads(WALLS_FILE.read_text(encoding="utf-8")) if WALLS_FILE.exists() else {}
+SLIVER = 20     # кусок без номера уже этого — не помещение
+MIN_PIECE = 6   # помещение уже этого — скорее ошибка распознавания стены, сливаем с соседом
+
+
+def by_walls(lo, hi, ws, rooms, k, mk):
+    """Ряд режется по найденным перегородкам; номер попадает в свой кусок.
+    Два номера в одном куске (стену не нашли) — делим кусок между ними."""
+    bounds = [lo] + sorted(w for w in ws if lo + MIN_PIECE < w < hi - MIN_PIECE) + [hi]
+    pieces = []
+    for a, b in zip(bounds, bounds[1:]):
+        if pieces and b - a < MIN_PIECE:
+            pieces[-1] = (pieces[-1][0], b)
+        elif pieces and pieces[-1][1] - pieces[-1][0] < MIN_PIECE:
+            pieces[-1] = (pieces[-1][0], b)
+        else:
+            pieces.append((a, b))
+    # узкий кусок без номера — обычно двойная линия стены или значок: присоединяем к соседу
+    named = lambda a, b: any(a <= min(max(r[k], lo), hi - 1e-6) < b for r in rooms)
+    changed = True
+    while changed and len(pieces) > 1:
+        changed = False
+        for i, (a, b) in enumerate(pieces):
+            # крошечный кабинет рядом с помещением без номера — стену нашли не там, объединяем
+            if b - a < 12 and named(a, b):
+                nb = [j for j in (i - 1, i + 1) if 0 <= j < len(pieces) and not named(*pieces[j])]
+                if nb:
+                    j = nb[0]
+                    pieces[min(i, j)] = (min(pieces[i][0], pieces[j][0]), max(pieces[i][1], pieces[j][1]))
+                    del pieces[max(i, j)]
+                    changed = True
+                    break
+            if b - a < SLIVER and not named(a, b):
+                j = i - 1 if i == len(pieces) - 1 or (i > 0 and named(*pieces[i - 1])) else i + 1
+                lo_, hi_ = min(pieces[i][0], pieces[j][0]), max(pieces[i][1], pieces[j][1])
+                pieces[min(i, j)] = (lo_, hi_)
+                del pieces[max(i, j)]
+                changed = True
+                break
+    out = []
+    for a, b in pieces:
+        pos = lambda r: min(max(r[k], lo), hi - 1e-6)  # номер чуть за краем ряда — в крайний кусок
+        inside_ = [r for r in rooms if a <= pos(r) < b]
+        if not inside_:
+            out.append((None, mk(a, b)))
+            continue
+        for (name, *_), (c, d) in zip(inside_, split(a, b, [pos(r) for r in inside_])):
+            out.append((name, mk(c, d)))
+    return out
+
+
 def layout(floor_no, spec, labels):
     """Раскладка: [(номер, (x0, y0, x1, y1))] + список номеров, которые никуда не попали."""
     fixed = [s[1] for s in spec["stairs"]] + [s[1] for s in spec["lifts"]] + [c[1] for c in spec["cells"]] \
@@ -118,12 +174,17 @@ def layout(floor_no, spec, labels):
         s = min(hits, key=lambda s: dist(px, py, s["rect"]))
         s["rooms"].append((name, px, py))
     cells = list(spec["cells"])
+    walls = WALLS.get(str(floor_no), {})
     for s in segs:
         x0, y0, x1, y1 = s["rect"]
         k = 1 if s["axis"] == "x" else 2
         rooms = sorted(s["rooms"], key=lambda t: t[k])
         lo, hi = (x0, x1) if s["axis"] == "x" else (y0, y1)
         mk = (lambda a, b: (a, y0, b, y1)) if s["axis"] == "x" else (lambda a, b: (x0, a, x1, b))
+        found = walls.get(seg_key(s["rect"]))
+        if found is not None:  # перегородки, найденные на фото (detect_walls.py), — режем по ним
+            cells += by_walls(lo, hi, found["walls"], rooms, k, mk)
+            continue
         for (name, *xy), (a, b) in zip(rooms, split(lo, hi, [t[k] for t in rooms])):
             if b - a > MAX_CELL:  # один номер на длинный ряд — не тянем кабинет на весь ряд
                 c = min(max(xy[k - 1], a + MAX_CELL / 2), b - MAX_CELL / 2)
