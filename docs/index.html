@@ -119,6 +119,26 @@
               backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
   .map-wrap { position: relative; }
 
+
+  /* карта территории (plans/campus.svg) */
+  .campus { position: relative; border-radius: 16px; overflow: hidden; border: 1px solid var(--line); background: #070708; }
+  .campus-svg { display: block; width: 100%; height: auto; }
+  .campus-svg .road { fill: #19191e; }
+  .campus-svg .road-lbl { font: 600 13px Inter, system-ui, sans-serif; fill: #55555f; text-anchor: middle;
+                          dominant-baseline: central; letter-spacing: .2em; }
+  .campus-svg .parking { fill: #121216; }
+  .campus-svg .stall { stroke: #26262d; stroke-width: .8; fill: none; }
+  .campus-svg .garden { fill: #0c160f; }
+  .campus-svg .tree { fill: #13261a; }
+  .campus-svg .walk { stroke: #24242b; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+  .campus-svg .bld { fill: #1d1d24; stroke: #6e6e7c; stroke-width: 2; stroke-linejoin: round; }
+  .campus-svg .bld.target { fill: rgba(255,0,0,.28); stroke: #ff3030; }
+  .campus-svg .gallery { fill: #2a2a33; stroke: #6e6e7c; stroke-width: 1; }
+  .campus-svg .entry { fill: none; stroke: #ff3030; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .campus-svg .lbl { font: 600 19px Inter, system-ui, sans-serif; fill: #9a9aa6; text-anchor: middle; dominant-baseline: central; }
+  .campus-svg .lbl.target { fill: #fff; }
+  .campus-svg .lbl.small { font-size: 15px; text-anchor: start; fill: #ff6060; }
+
   /* красная точка: чистый #ff0000, мигает */
   .dot { position: absolute; z-index: 3; width: 8px; height: 8px; margin: -4px 0 0 -4px; border-radius: 50%;
          background: var(--red); box-shadow: 0 0 6px 1px rgba(255,0,0,.85);
@@ -275,6 +295,20 @@ function heroHTML(l, loc, cur, now) {
   </div>`;
 }
 
+// карта территории: нужный корпус подсвечен, точка — на нём
+let campusSvg = null, campusPts = {};
+fetch("plans/campus.svg?v=" + Date.now()).then(r => r.text()).then(t => { campusSvg = t; lastKey = ""; render(); }).catch(() => {});
+fetch("campus.json", { cache: "no-store" }).then(r => r.json()).then(j => { campusPts = j; lastKey = ""; render(); }).catch(() => {});
+function campusHTML(loc) {
+  if (!campusSvg || !loc) return "";
+  const p = campusPts[loc.building];
+  const how = loc.note ? `<div class="empty-note">${esc(loc.note)}</div>` : "";
+  const miss = p ? "" : `<div class="empty-note">Этот корпус пока не отмечен на карте территории</div>`;
+  return `<div class="card fade"><div class="section-title"><h2>Территория</h2><span>${esc(BUILDINGS[loc.building].name)}</span></div>
+    <div class="campus" data-target="${loc.building}">${campusSvg}
+      ${p ? `<div class="dot" style="left:${p.x * 100}%;top:${p.y * 100}%"></div>` : ""}</div>${how}${miss}</div>`;
+}
+
 function planHTML(loc) {
   const mark = loc && findMark(rooms, loc.room);
   const planId = (mark && mark.plan) || (loc && loc.planId);
@@ -336,9 +370,11 @@ function render() {
 
   const l = lessons[selected], loc = locateRoom(l[2]);
   // перерисовываем главную часть только когда что-то поменялось (иначе анимации дёргаются)
-  const key = `${selected}|${now.min}|${Object.keys(rooms).length}|${Object.keys(plans).length}|${Object.values(svgCache).join("").length}`;
+  const key = `${selected}|${now.min}|${Object.keys(rooms).length}|${Object.keys(plans).length}|${Object.values(svgCache).join("").length}|${campusSvg ? 1 : 0}|${Object.keys(campusPts).length}`;
   if (key !== lastKey) {
-    main.innerHTML = heroHTML(l, loc, cur, now.min) + planHTML(loc);
+    main.innerHTML = heroHTML(l, loc, cur, now.min) + planHTML(loc) + campusHTML(loc);
+    const c = main.querySelector(".campus");  // подсветить корпус на карте территории
+    if (c) c.querySelectorAll(`[data-b="${c.dataset.target}"]`).forEach(e => e.classList.add("target"));
     if (selected === lastSel) main.querySelectorAll(".fade").forEach(e => e.classList.remove("fade"));  // анимация — только при смене пары
     lastKey = key; lastSel = selected;
     bindZoom();
