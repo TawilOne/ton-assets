@@ -344,8 +344,9 @@ function render() {
 }
 
 Promise.all([
-  fetch("rooms.json").then(r => r.json()).catch(() => ({})),
-  fetch("plans.json").then(r => r.json()).catch(() => ({})),
+  // no-store: после обновления карты сразу берём новые файлы, а не старые из кэша Telegram
+  fetch("rooms.json", { cache: "no-store" }).then(r => r.json()).catch(() => ({})),
+  fetch("plans.json", { cache: "no-store" }).then(r => r.json()).catch(() => ({})),
 ]).then(([r, p]) => { rooms = r; plans = p; lastKey = ""; render(); });
 render();
 setInterval(render, 5000);  // часы, прогресс пары и переключение на следующую пару

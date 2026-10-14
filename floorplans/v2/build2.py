@@ -7,6 +7,7 @@
 по рядам и пишет docs/plans/main-N.svg, docs/rooms.json, docs/plans.json.
 С папкой для превью дополнительно рисует схему поверх выпрямленного фото — для сверки.
 """
+import hashlib
 import json
 import pathlib
 import sys
@@ -227,7 +228,9 @@ def main():
     for f, spec in FLOORS.items():
         svg, out, lost, box, cells = build(f, spec, labels.get(f, {}))
         (DOCS / "plans" / f"main-{f}.svg").write_text(svg, encoding="utf-8")
-        plans[f"main-{f}"] = f"plans/main-{f}.svg"
+        # ?v=хэш — чтобы Telegram не показывал старую схему из своего кэша после обновления
+        ver = hashlib.md5(svg.encode()).hexdigest()[:8]
+        plans[f"main-{f}"] = f"plans/main-{f}.svg?v={ver}"
         rooms.update(out)
         print(f"этаж {f}: кабинетов {len(out)}" + (f", не размещены: {', '.join(lost)}" if lost else ""))
         if preview:
