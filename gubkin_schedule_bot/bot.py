@@ -25,6 +25,7 @@ import json
 import logging
 import os
 import pathlib
+import re
 import threading
 import time
 from urllib.parse import urlencode
@@ -65,6 +66,7 @@ HELP = (
     "/today — на сегодня\n"
     "/tomorrow — на завтра\n"
     "/week — текущая неделя\n"
+    "/subscribe — присылать расписание в выбранное время\n"
     "/settings — язык"
 )
 
@@ -204,16 +206,21 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 # ---- настройки: язык
 
-def _settings_markup(lang: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton(("• " if code == lang else "") + name, callback_data=f"lang:{code}")
-        for code, name in i18n.LANG_NAMES.items()]])
+def _settings_markup(lang: str, chat_id) -> InlineKeyboardMarkup:
+    langs = [InlineKeyboardButton(("• " if code == lang else "") + name, callback_data=f"lang:{code}")
+             for code, name in i18n.LANG_NAMES.items()]
+    return InlineKeyboardMarkup([langs] + _sub_markup(lang, str(chat_id) in _load_subs()))
+
+
+def _settings_text(lang: str, chat_id) -> str:
+    head, choose = i18n.t("settings", lang, name=i18n.LANG_NAMES[lang]).split("\n\n", 1)
+    return f"{head}\n{_sub_status(chat_id, lang)}\n\n{choose}"
 
 
 async def cmd_settings(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    lang = _lang(update)
-    await update.effective_message.reply_text(i18n.t("settings", lang, name=i18n.LANG_NAMES[lang]),
-                                              parse_mode="HTML", reply_markup=_settings_markup(lang))
+    lang, chat = _lang(update), update.effective_chat.id
+    await update.effective_message.reply_text(_settings_text(lang, chat), parse_mode="HTML",
+                                              reply_markup=_settings_markup(lang, chat))
 
 
 async def on_lang(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -225,8 +232,9 @@ async def on_lang(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     i18n.set_lang(update.effective_user.id, lang)
     await q.answer(i18n.t("lang_set", lang))
     try:
-        await q.edit_message_text(i18n.t("settings", lang, name=i18n.LANG_NAMES[lang]), parse_mode="HTML",
-                                  reply_markup=_settings_markup(lang))
+        chat = update.effective_chat.id
+        await q.edit_message_text(_settings_text(lang, chat), parse_mode="HTML",
+                                  reply_markup=_settings_markup(lang, chat))
     except Exception:  # сообщение не изменилось
         pass
     # новая клавиатура внизу чата — уже на выбранном языке
@@ -300,7 +308,11 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     func_name = BUTTON_ACTIONS.get(text)  # нажата кнопка — выполняем соответствующую команду
     if func_name:
         ctx.user_data.pop("captcha", None)
+        ctx.user_data.pop("await_time", None)
         await globals()[func_name](update, ctx)
+        return
+    if ctx.user_data.pop("await_time", False):  # ответ на «во сколько присылать расписание?»
+        await _set_time(update, ctx, text)
         return
     if not ctx.user_data.pop("captcha", False):
         lang = _lang(update)
@@ -363,53 +375,137 @@ async def cmd_map(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_message.reply_text(("\n".join(lines) or title) + note, reply_markup=button)
 
 
-# ---- утренняя рассылка
+# ---- рассылка расписания в выбранное время
 
-def _load_subscribers() -> set[int]:
+EVENING = 18 * 60  # с 18:00 присылаем расписание на следующий день
+_subs_lock = threading.Lock()
+
+
+def _load_subs() -> dict[str, dict]:
+    """{chat_id: {"time": "07:00", "last": "2026-10-14"}}. Старый формат (список id) — время 07:00."""
     try:
-        return set(json.loads(SUBSCRIBERS_FILE.read_text(encoding="utf-8")))
+        data = json.loads(SUBSCRIBERS_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return set()
+        return {}
+    if isinstance(data, list):
+        return {str(i): {"time": f"{MORNING:%H:%M}"} for i in data}
+    return {str(k): v for k, v in data.items() if isinstance(v, dict) and v.get("time")}
 
 
-def _save_subscribers(ids: set[int]) -> None:
-    SUBSCRIBERS_FILE.write_text(json.dumps(sorted(ids)), encoding="utf-8")
+def _save_subs(subs: dict) -> None:
+    try:
+        SUBSCRIBERS_FILE.write_text(json.dumps(subs, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        log.warning("cannot save %s", SUBSCRIBERS_FILE)
+
+
+def _parse_time(text: str) -> str | None:
+    """'7:00', '07.30', '7 30', '21-15', '7' -> 'HH:MM' или None."""
+    m = re.fullmatch(r"\s*(\d{1,2})(?:\s*[:.\-hч ]\s*(\d{2}))?\s*", text or "")
+    if not m:
+        return None
+    h, mi = int(m.group(1)), int(m.group(2) or 0)
+    return f"{h:02d}:{mi:02d}" if h < 24 and mi < 60 else None
+
+
+def _sub_markup(lang: str, on: bool) -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton(i18n.t("btn_sub_change" if on else "btn_sub_set", lang), callback_data="sub:set")]]
+    if on:
+        rows.append([InlineKeyboardButton(i18n.t("btn_sub_off", lang), callback_data="sub:off")])
+    return rows
+
+
+def _sub_status(chat_id, lang: str) -> str:
+    sub = _load_subs().get(str(chat_id))
+    return i18n.t("sub_on", lang, time=sub["time"]) if sub else i18n.t("sub_off", lang)
 
 
 async def cmd_subscribe(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    ids = _load_subscribers()
-    ids.add(update.effective_chat.id)
-    _save_subscribers(ids)
-    await update.effective_message.reply_text(i18n.t("subscribed", _lang(update), time=f"{MORNING:%H:%M}"))
+    """Спрашивает время рассылки; ответ ловит on_text."""
+    ctx.user_data["await_time"] = True
+    ctx.user_data.pop("captcha", None)
+    await update.effective_message.reply_text(i18n.t("sub_ask", _lang(update)), parse_mode="HTML")
 
 
 async def cmd_unsubscribe(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    ids = _load_subscribers()
-    ids.discard(update.effective_chat.id)
-    _save_subscribers(ids)
+    with _subs_lock:
+        subs = _load_subs()
+        subs.pop(str(update.effective_chat.id), None)
+        _save_subs(subs)
+    ctx.user_data.pop("await_time", None)
     await update.effective_message.reply_text(i18n.t("unsubscribed", _lang(update)))
 
 
-async def morning_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    ids = _load_subscribers()
-    if not ids:
+async def _set_time(update: Update, ctx: ContextTypes.DEFAULT_TYPE, text: str) -> None:
+    lang = _lang(update)
+    hhmm = _parse_time(text)
+    if not hhmm:
+        ctx.user_data["await_time"] = True  # ждём ещё одну попытку
+        await update.effective_message.reply_text(i18n.t("sub_bad", lang), parse_mode="HTML")
         return
-    d = _today()
-    try:
-        lessons, _ = await asyncio.to_thread(_fetch, d, d)
-    except (GubkinError, OSError):
-        log.exception("morning fetch failed")
-        return
-    if not lessons:  # в выходной не беспокоим
+    now = dt.datetime.now(MSK)
+    with _subs_lock:
+        subs = _load_subs()
+        # если выбранное время сегодня уже прошло — первая рассылка будет завтра
+        subs[str(update.effective_chat.id)] = {"time": hhmm, "last": now.date().isoformat()
+                                               if hhmm <= f"{now:%H:%M}" else ""}
+        _save_subs(subs)
+    h, m = map(int, hhmm.split(":"))
+    key = "sub_done_tomorrow" if h * 60 + m >= EVENING else "sub_done_today"
+    await update.effective_message.reply_text(i18n.t(key, lang, time=hhmm), reply_markup=keyboard(lang))
+
+
+async def on_sub_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    q = update.callback_query
+    await q.answer()
+    if q.data == "sub:off":
+        await cmd_unsubscribe(update, ctx)
+    else:
+        await cmd_subscribe(update, ctx)
+
+
+async def digest_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Раз в полминуты: кому пора — присылает расписание (утром — на этот день, вечером — на завтра).
+    Опоздание до 15 минут (бот перезапускался) — всё равно присылаем, но не дважды за день."""
+    now = dt.datetime.now(MSK)
+    now_min = now.hour * 60 + now.minute
+    today = now.date().isoformat()
+    with _subs_lock:
+        subs = _load_subs()
+    due = []
+    for chat_id, sub in subs.items():
+        h, m = map(int, sub["time"].split(":"))
+        if sub.get("last") != today and 0 <= now_min - (h * 60 + m) < 15:
+            due.append((chat_id, h * 60 + m))
+    if not due:
         return
     texts = {}
-    for chat_id in ids:
+    for chat_id, at in due:
+        evening = at >= EVENING
+        d = now.date() + dt.timedelta(days=1 if evening else 0)
         lang = i18n.get_lang(chat_id)  # в личном чате id чата = id пользователя
-        if lang not in texts:
-            texts[lang] = i18n.t("morning", lang) + "\n\n" + to_html(lessons, today=d, lang=lang)
+        key = (d, lang)
+        if key not in texts:
+            try:
+                lessons, _ = await asyncio.to_thread(_fetch, d, d)
+            except (GubkinError, OSError):
+                log.exception("digest fetch failed")
+                return
+            if not lessons:  # пар нет — не беспокоим
+                texts[key] = None
+            else:
+                head = i18n.t("evening" if evening else "morning" if at < 12 * 60 else "digest_today", lang)
+                texts[key] = head + "\n\n" + to_html(lessons, today=now.date(), lang=lang)
+        with _subs_lock:  # отмечаем сразу, чтобы не прислать повторно
+            subs = _load_subs()
+            if chat_id in subs:
+                subs[chat_id]["last"] = today
+                _save_subs(subs)
+        if texts[key] is None:
+            continue
         try:
-            for part in _split(texts[lang]):
-                await ctx.bot.send_message(chat_id, part, parse_mode="HTML")
+            for part in _split(texts[key]):
+                await ctx.bot.send_message(int(chat_id), part, parse_mode="HTML")
         except Exception:  # пользователь заблокировал бота и т. п.
             log.warning("cannot send to %s", chat_id)
 
@@ -669,10 +765,12 @@ class _ShortNetworkErrors(logging.Filter):
 
 
 COMMANDS = {  # меню команд Telegram (кнопка «Меню» слева от поля ввода) — на языке приложения Telegram
-    "ru": [("today", "Сегодня"), ("tomorrow", "Завтра"), ("week", "Неделя"), ("settings", "Настройки и язык")],
-    "en": [("today", "Today"), ("tomorrow", "Tomorrow"), ("week", "This week"), ("settings", "Settings and language")],
+    "ru": [("today", "Сегодня"), ("tomorrow", "Завтра"), ("week", "Неделя"),
+           ("subscribe", "Присылать расписание в выбранное время"), ("settings", "Настройки и язык")],
+    "en": [("today", "Today"), ("tomorrow", "Tomorrow"), ("week", "This week"),
+           ("subscribe", "Get the timetable at a time you choose"), ("settings", "Settings and language")],
     "fr": [("today", "Aujourd'hui"), ("tomorrow", "Demain"), ("week", "Cette semaine"),
-           ("settings", "Paramètres et langue")],
+           ("subscribe", "Recevoir l'emploi du temps à l'heure choisie"), ("settings", "Paramètres et langue")],
 }
 
 
@@ -734,6 +832,7 @@ def main() -> None:
     app.add_handler(CommandHandler(["start", "help"], cmd_start))
     app.add_handler(CommandHandler(["settings", "language"], cmd_settings))
     app.add_handler(CallbackQueryHandler(on_lang, pattern=r"^lang:"))
+    app.add_handler(CallbackQueryHandler(on_sub_button, pattern=r"^sub:"))
     app.add_handler(CommandHandler("untranslated", cmd_untranslated))
     app.add_handler(CommandHandler("myid", cmd_myid))
     app.add_handler(CommandHandler("users", cmd_users))
@@ -754,7 +853,7 @@ def main() -> None:
     app.add_handler(CommandHandler("first", cmd_first))
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler("free", cmd_free))
-    app.job_queue.run_daily(morning_job, time=MORNING)
+    app.job_queue.run_repeating(digest_job, interval=30, first=10)  # рассылка в выбранное время
     # подгрузка расписания при старте и каждые 20 минут (кэш живёт 30 минут)
     if client.offline:  # сервер: на сайт не ходим, следим за присылаемым расписанием
         log.info("offline: расписание берётся из cache.json, который присылает ноутбук (sync.py)")

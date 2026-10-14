@@ -58,11 +58,13 @@ TEXT = {
               "/today — today's classes\n"
               "/tomorrow — tomorrow's classes\n"
               "/week — this week\n"
+              "/subscribe — get the timetable at a time you choose\n"
               "/settings — language",
         "fr": "📅 Emploi du temps de l'Université Gubkin, groupe {group}\n\n"
               "/today — les cours d'aujourd'hui\n"
               "/tomorrow — les cours de demain\n"
               "/week — cette semaine\n"
+              "/subscribe — recevoir l'emploi du temps à l'heure choisie\n"
               "/settings — langue",
     },
     "beta": {
@@ -138,9 +140,53 @@ TEXT = {
         "fr": f"C'est fait{NBSP}! Chaque matin à {{time}}, je vous enverrai l'emploi du temps du jour "
               f"(s'il y a des cours). Pour vous désabonner, envoyez /unsubscribe",
     },
-    "unsubscribed": {"ru": "Вы отписались от утренней рассылки.",
-                     "en": "You've unsubscribed from the morning timetable.",
-                     "fr": "Vous ne recevrez plus l'emploi du temps du matin."},
+    "unsubscribed": {"ru": "🔕 Рассылка отключена. Включить снова — /settings",
+                     "en": "🔕 The daily timetable is turned off. To turn it back on: /settings",
+                     "fr": f"🔕 L'envoi quotidien est désactivé. Pour le réactiver{NBSP}: /settings"},
+    "sub_off": {"ru": "⏰ Рассылка расписания: выключена", "en": "⏰ Daily timetable: off",
+                "fr": f"⏰ Envoi de l'emploi du temps{NBSP}: désactivé"},
+    "sub_on": {"ru": "⏰ Рассылка расписания: каждый день в {time}", "en": "⏰ Daily timetable: every day at {time}",
+               "fr": f"⏰ Envoi de l'emploi du temps{NBSP}: tous les jours à {{time}}"},
+    "btn_sub_set": {"ru": "⏰ Выбрать время рассылки", "en": "⏰ Set a time", "fr": "⏰ Choisir l'heure"},
+    "btn_sub_change": {"ru": "⏰ Изменить время", "en": "⏰ Change the time", "fr": "⏰ Modifier l'heure"},
+    "btn_sub_off": {"ru": "🔕 Отключить рассылку", "en": "🔕 Turn off", "fr": "🔕 Désactiver"},
+    "sub_ask": {
+        "ru": "Во сколько присылать расписание? Напишите время ответным сообщением (по Москве).\n\n"
+              "Например: <b>7:00</b>, <b>07:30</b> или <b>21:15</b>\n\n"
+              "Утром пришлю расписание на этот день, а если время вечернее (с 18:00) — на следующий день.",
+        "en": "What time should I send you the timetable? Reply with a time (Moscow time).\n\n"
+              "For example: <b>7:00</b>, <b>07:30</b> or <b>21:15</b>\n\n"
+              "In the morning I'll send that day's timetable; if you choose an evening time (18:00 or later), "
+              "I'll send the next day's.",
+        "fr": f"À quelle heure voulez-vous recevoir l'emploi du temps{NBSP}? Répondez avec une heure "
+              "(heure de Moscou).\n\n"
+              f"Par exemple{NBSP}: <b>7:00</b>, <b>07:30</b> ou <b>21:15</b>\n\n"
+              "Le matin, je vous enverrai l'emploi du temps du jour{NBSP}; si vous choisissez une heure du soir "
+              "(à partir de 18:00), celui du lendemain.".replace("{NBSP}", NBSP),
+    },
+    "sub_bad": {"ru": "Не понял время 🤔 Напишите, например: <b>7:00</b>",
+                "en": "I didn't understand the time 🤔 Please write it like this: <b>7:00</b>",
+                "fr": f"Je n'ai pas compris l'heure 🤔 Écrivez-la par exemple ainsi{NBSP}: <b>7:00</b>"},
+    "sub_done_today": {
+        "ru": "✅ Готово! Каждый день в {time} буду присылать расписание на этот день (если есть пары).\n"
+              "Изменить время или отключить — /settings",
+        "en": "✅ Done! Every day at {time} I'll send you that day's timetable (if you have classes).\n"
+              "To change the time or turn it off: /settings",
+        "fr": f"✅ C'est fait{NBSP}! Tous les jours à {{time}}, je vous enverrai l'emploi du temps du jour "
+              f"(s'il y a des cours).\nPour modifier l'heure ou désactiver l'envoi{NBSP}: /settings",
+    },
+    "sub_done_tomorrow": {
+        "ru": "✅ Готово! Каждый день в {time} буду присылать расписание на следующий день (если есть пары).\n"
+              "Изменить время или отключить — /settings",
+        "en": "✅ Done! Every day at {time} I'll send you the next day's timetable (if you have classes).\n"
+              "To change the time or turn it off: /settings",
+        "fr": f"✅ C'est fait{NBSP}! Tous les jours à {{time}}, je vous enverrai l'emploi du temps du lendemain "
+              f"(s'il y a des cours).\nPour modifier l'heure ou désactiver l'envoi{NBSP}: /settings",
+    },
+    "digest_today": {"ru": "📅 Расписание на сегодня:", "en": "📅 Today's timetable:",
+                     "fr": f"📅 Votre emploi du temps d'aujourd'hui{NBSP}:"},
+    "evening": {"ru": "Добрый вечер! 🌙 Расписание на завтра:", "en": "Good evening! 🌙 Here's tomorrow's timetable:",
+                "fr": f"Bonsoir{NBSP}! 🌙 Voici votre emploi du temps de demain{NBSP}:"},
     "morning": {"ru": "Доброе утро! ☀️ Расписание на сегодня:", "en": "Good morning! ☀️ Here's today's timetable:",
                 "fr": f"Bonjour{NBSP}! ☀️ Voici votre emploi du temps d'aujourd'hui{NBSP}:"},
     "captcha_failed": {"ru": "Не удалось загрузить капчу: {e}", "en": "Couldn't load the captcha: {e}",
