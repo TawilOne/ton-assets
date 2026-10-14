@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
-<script src="campus.js"></script>
+<script src="campus.js?v=93a7c2b7"></script>
 <style>
   :root {
     --bg: #000;
@@ -196,7 +196,8 @@ let lessons = [];
 try { lessons = JSON.parse(params.get("l") || "[]"); } catch (e) { lessons = []; }
 document.getElementById("date").textContent = params.get("d") || "";
 
-// тексты страницы на выбранном языке (LANG и L3 — из campus.js)
+// тексты страницы на выбранном языке (LANG и L3 — из campus.js; если пришёл старый файл из кэша — по-русски)
+if (typeof L3 === "undefined") { window.LANG = "ru"; window.L3 = ru => ru; }
 const TX = {
   title: L3("Где пара", "Where's my class", "Où est mon cours"),
   beta: L3("<b>Бета-версия.</b> Карта и расписание ещё дорабатываются и могут содержать ошибки — не опирайтесь на них полностью и сверяйтесь с официальным расписанием.",

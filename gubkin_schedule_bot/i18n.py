@@ -376,17 +376,40 @@ def _key(name: str) -> str:
 _SUBJECT_KEYS = {_key(k): v for k, v in SUBJECTS.items()}
 
 
+# «Иностранный язык (английский)» — язык в скобках; русский как иностранный — отдельное название
+LANGUAGES = {
+    "английский": ("English", "anglais"), "немецкий": ("German", "allemand"),
+    "французский": ("French", "français"), "испанский": ("Spanish", "espagnol"),
+    "итальянский": ("Italian", "italien"), "китайский": ("Chinese", "chinois"),
+    "арабский": ("Arabic", "arabe"), "японский": ("Japanese", "japonais"),
+}
+_FOREIGN = re.compile(r"^иностранный язык\s*\(([^)]+)\)$")
+
+
+def _foreign(name: str):
+    m = _FOREIGN.match(_key(name))
+    if not m:
+        return None
+    language = m.group(1).strip()
+    if language == "русский":
+        return ("Russian as a Foreign Language", "Russe langue étrangère")
+    if language in LANGUAGES:
+        en, fr = LANGUAGES[language]
+        return (f"Foreign Language ({en})", f"Langue étrangère ({fr})")
+    return None
+
+
 def subject(name: str, lang: str = "ru") -> str:
     if lang == "ru" or not name:
         return name
-    tr = _SUBJECT_KEYS.get(_key(name))
+    tr = _SUBJECT_KEYS.get(_key(name)) or _foreign(name)
     if not tr:
         return name
     return tr[0] if lang == "en" else tr[1]
 
 
 def has_subject(name: str) -> bool:
-    return _key(name) in _SUBJECT_KEYS
+    return _key(name) in _SUBJECT_KEYS or _foreign(name) is not None
 
 
 # ---- пометки об изменениях (их пишет schedule.parse_week)
