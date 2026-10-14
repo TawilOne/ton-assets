@@ -114,8 +114,9 @@
                 background: var(--red); padding: 2px 7px; border-radius: 7px; z-index: 2;
                 box-shadow: 0 4px 14px rgba(255,0,0,.5); }
   .map.zoom .lbl.target { font-size: 14px; }
-  /* кнопки этажей — компактной колонкой слева от карты */
-  .map-wrap.has-floors { display: flex; align-items: center; gap: 8px; }
+  /* кнопки этажей — компактной колонкой справа от карты */
+  .map-wrap.has-floors { display: flex; flex-direction: row-reverse; align-items: center; gap: 8px; }
+  .map-wrap.has-floors .zoom-btn { right: 52px; }  /* «+» — в углу карты, а не на кнопках этажей */
   .map-wrap.has-floors .map { flex: 1; min-width: 0; }
   .floor-tabs { flex: none; display: flex; flex-direction: column; gap: 2px; padding: 3px; border-radius: 11px;
                 background: var(--surface-2); border: 1px solid var(--line); }
