@@ -118,6 +118,19 @@
               border: 1px solid var(--line); background: rgba(23,23,26,.85); color: var(--text); font-size: 17px;
               backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
   .map-wrap { position: relative; }
+  /* кнопки этажей — компактной колонкой справа от карты */
+  .map-row { display: flex; align-items: center; gap: 6px; }
+  .map-row .map-wrap { flex: 1 1 auto; min-width: 0; }
+  .floor-tabs { flex: 0 0 auto; display: flex; flex-direction: column; gap: 2px; padding: 3px; border-radius: 11px;
+                background: var(--surface-2); border: 1px solid var(--line); }
+  .ftab { -webkit-appearance: none; appearance: none; display: block; width: 26px; height: 19px; border-radius: 6px;
+          border: 0; margin: 0; padding: 0; background: transparent; color: var(--muted); cursor: pointer;
+          font: 600 11px/19px Inter, system-ui, sans-serif; text-align: center; position: relative;
+          -webkit-tap-highlight-color: transparent; }
+  .ftab.on { background: #fff; color: #000; }
+  .ftab.here::after { content: ""; position: absolute; top: 2px; right: 1px; width: 5px; height: 5px; border-radius: 50%;
+                      background: var(--red); box-shadow: 0 0 5px rgba(255,0,0,.8); }
+  .back-floor { color: var(--red); text-decoration: none; font-weight: 600; }
 
   /* красная точка: чистый #ff0000, мигает */
   .dot { position: absolute; z-index: 3; width: 8px; height: 8px; margin: -4px 0 0 -4px; border-radius: 50%;
@@ -221,6 +234,8 @@ const TX = {
   rest: L3("Можно отдохнуть", "Time to relax", "Profitez-en pour vous reposer"),
   count: n => LANG === "en" ? `${n} ${n === 1 ? "class" : "classes"}` : LANG === "fr" ? `${n} cours`
             : `${n} ${plural(n, "пара", "пары", "пар")}`,
+  away: f => L3(`Пара — ${f}.`, `Your class is on the ${f}.`, `Le cours est au ${f}.`),
+  back: L3("Вернуться", "Go back", "Revenir"),
   zoom: L3("Увеличить", "Zoom in", "Agrandir"),
   hide: L3("Скрыть", "Hide", "Masquer"),
 };
@@ -311,26 +326,46 @@ function heroHTML(l, loc, cur, now) {
   </div>`;
 }
 
+// этаж, выбранный кнопкой справа от карты; null — этаж текущей пары
+let viewFloor = null;
+
+function floorTabs(building, shown, target) {
+  const ids = Object.keys(plans).filter(k => k.startsWith(building + "-")).map(k => +k.split("-")[1])
+    .filter(n => !isNaN(n)).sort((a, b) => b - a);
+  if (ids.length < 2) return "";
+  return `<div class="floor-tabs">${ids.map(n =>
+    `<button type="button" class="ftab${n === shown ? " on" : ""}${n === target ? " here" : ""}" data-floor="${n}">${n}</button>`).join("")}</div>`;
+}
+
 function planHTML(loc) {
-  const mark = loc && findMark(rooms, loc.room);
-  const planId = (mark && mark.plan) || (loc && loc.planId);
+  const mark0 = loc && findMark(rooms, loc.room);
+  const targetPlan = (mark0 && mark0.plan) || (loc && loc.planId);
+  const building = targetPlan ? String(targetPlan).split("-")[0] : null;
+  const targetFloor = targetPlan ? +String(targetPlan).split("-")[1] : null;
+  const planId = viewFloor !== null && plans[`${building}-${viewFloor}`] ? `${building}-${viewFloor}` : targetPlan;
+  const shownFloor = planId ? +String(planId).split("-")[1] : null;
+  const onTarget = planId === targetPlan;
+  const mark = onTarget ? mark0 : null;  // красная точка — только на этаже пары
   const planFile = planId && plans[planId];
-  const where = loc ? `${BUILDINGS[loc.building].name}${loc.floor !== null ? " · " + floorLabel(loc.floor) : ""}` : "";
+  const where = loc ? `${BUILDINGS[loc.building].name}${shownFloor !== null && !isNaN(shownFloor) ? " · " + floorLabel(shownFloor)
+    : loc.floor !== null ? " · " + floorLabel(loc.floor) : ""}` : "";
   if (planFile) {
     if (!(planId in svgCache)) {  // схему этажа подгружаем один раз
       svgCache[planId] = "";
       fetch(planFile).then(r => r.text()).then(t => { svgCache[planId] = t; lastKey = ""; render(); }).catch(() => {});
     }
+    const tabs = floorTabs(building, shownFloor, targetFloor);
+    const away = `<div class="empty-note">${esc(TX.away(floorLabel(targetFloor)))} <a href="#" class="back-floor">${TX.back}</a></div>`;
     const targetKey = mark ? Object.keys(rooms).find(k => rooms[k] === mark) : "";
     // у верхнего края карты ярлык не поместится над точкой — ставим его под точкой
     const below = mark && mark.y < 0.15 ? ";transform:translate(-50%,90%)" : "";
     const labels = mark ? `<span class="lbl target" style="left:${mark.x * 100}%;top:${mark.y * 100}%${below}">${esc(targetKey)}</span>` : "";
     return `<div class="card fade"><div class="section-title"><h2>${TX.plan}</h2><span>${esc(where)}</span></div>
-      <div class="map-wrap"><div class="map ${zoomed ? "zoom" : ""}" id="map"><div class="map-inner">
+      <div class="map-row"><div class="map-wrap"><div class="map ${zoomed ? "zoom" : ""}" id="map"><div class="map-inner">
         ${svgCache[planId]}${labels}
         ${mark ? `<div class="dot" id="dot" style="left:${mark.x * 100}%;top:${mark.y * 100}%"></div>` : ""}
-      </div></div><button class="zoom-btn" id="zoom" aria-label="${TX.zoom}">${zoomed ? "−" : "+"}</button></div>
-      ${mark ? "" : `<div class="empty-note">${TX.notMarked}</div>`}</div>`;
+      </div></div><button class="zoom-btn" id="zoom" aria-label="${TX.zoom}">${zoomed ? "−" : "+"}</button></div>${tabs}</div>
+      ${!onTarget ? away : mark ? "" : `<div class="empty-note">${TX.notMarked}</div>`}</div>`;
   }
   if (loc && loc.floor !== null) {  // схема: корпус этажами, нужный этаж горит красным
     const top = Math.max(loc.floor + 1, 5);
@@ -372,12 +407,20 @@ function render() {
 
   const l = lessons[selected], loc = locateRoom(l[2]);
   // перерисовываем главную часть только когда что-то поменялось (иначе анимации дёргаются)
-  const key = `${selected}|${now.min}|${Object.keys(rooms).length}|${Object.keys(plans).length}|${Object.values(svgCache).join("").length}`;
+  if (selected !== lastSel) viewFloor = null;  // выбрали другую пару — снова показываем её этаж
+  const key = `${selected}|${viewFloor}|${now.min}|${Object.keys(rooms).length}|${Object.keys(plans).length}|${Object.values(svgCache).join("").length}`;
   if (key !== lastKey) {
     main.innerHTML = heroHTML(l, loc, cur, now.min) + planHTML(loc);
     if (selected === lastSel) main.querySelectorAll(".fade").forEach(e => e.classList.remove("fade"));  // анимация — только при смене пары
     lastKey = key; lastSel = selected;
     bindZoom();
+    main.querySelectorAll(".ftab").forEach(b => b.onclick = () => {
+      viewFloor = +b.dataset.floor; lastKey = "";
+      if (tg && tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
+      render();
+    });
+    const back = main.querySelector(".back-floor");
+    if (back) back.onclick = e => { e.preventDefault(); viewFloor = null; lastKey = ""; render(); };
     const t = main.querySelector(".lbl.target");  // подсветить ячейку нужного кабинета на схеме
     if (t) main.querySelectorAll(`.floor-svg [data-room="${CSS.escape(t.textContent)}"]`).forEach(e => e.classList.add("target"));
     if (zoomed) setTimeout(centerOnDot, 50);
