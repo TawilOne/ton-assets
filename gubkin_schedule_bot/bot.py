@@ -809,7 +809,7 @@ async def cmd_users(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     today = dt.datetime.now(MSK).strftime("%Y-%m-%d")
     active = sum(1 for u in users.values() if u.get("last", "").startswith(today))
     url = (os.environ.get("WEBAPP_URL") or _read_setting("webapp.txt") or DEFAULT_WEBAPP_URL) + \
-        f"admin.html?v={int(time.time() // 300)}#" + _admin_payload(users)
+        f"admin.html?v={int(time.time() // 300)}&p=" + _admin_payload(users)
     await update.effective_message.reply_text(
         f"👥 Пользователей: <b>{len(users)}</b> · сегодня активны: <b>{active}</b>",
         parse_mode="HTML",
@@ -818,8 +818,8 @@ async def cmd_users(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 def _admin_payload(users: dict) -> str:
-    """Данные для admin.html: сжатый JSON в части адреса после «#» — она не уходит на сервер GitHub,
-    страница читает её прямо в телефоне."""
+    """Данные для admin.html: сжатый JSON (deflate + base64url) в параметре «p» адреса.
+    В «#» класть нельзя: Telegram дописывает туда свои параметры."""
     import base64
     import zlib
     subs = _load_subs()
