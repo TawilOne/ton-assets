@@ -685,13 +685,19 @@ ACTION_OF_CMD = {"start": "start", "help": "start", "today": "today", "tomorrow"
                  "settings": "settings", "language": "settings", "all": "export", "captcha": "captcha"}
 
 
+ADMIN_CMDS = {"users", "broadcast", "untranslated", "myid"}
+
+
 def _action(update: Update) -> str | None:
     if update.callback_query:
         kind = (update.callback_query.data or "").split(":", 1)[0]
         return {"lang": "settings", "sub": "digest"}.get(kind)
     text = (update.effective_message.text or "").strip() if update.effective_message else ""
     if text.startswith("/"):
-        return ACTION_OF_CMD.get(text[1:].split()[0].split("@")[0].lower(), "other")
+        cmd = text[1:].split()[0].split("@")[0].lower() if len(text) > 1 else ""
+        if cmd in ADMIN_CMDS:  # служебные команды администратора в статистику не попадают
+            return None
+        return ACTION_OF_CMD.get(cmd, "other")
     if text in BUTTON_ACTIONS:
         return ACTION_OF_FUNC.get(BUTTON_ACTIONS[text], "other")
     return "text" if text else None
