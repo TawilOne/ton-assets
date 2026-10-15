@@ -96,8 +96,8 @@ TEXT = {
     "date_usage": {"ru": "Формат: /date 15.10.2026", "en": "Format: /date 15.10.2026",
                    "fr": f"Format{NBSP}: /date 15.10.2026"},
     "stale_offline": {
-        "ru": "⚠️ Расписание обновлялось {ago} — ноутбук с sync давно не выходил в сеть. "
-              "Возможны изменения, сверяйтесь с lk.gubkin.ru/schedule.",
+        "ru": "⚠️ Расписание обновлялось {ago}. С тех пор могли быть изменения — "
+              "сверяйтесь с lk.gubkin.ru/schedule.",
         "en": "⚠️ The timetable was last updated {ago}. There may have been changes since then, "
               "so check lk.gubkin.ru/schedule.",
         "fr": "⚠️ L'emploi du temps a été mis à jour {ago}. Il a pu changer depuis{NBSP}: "
