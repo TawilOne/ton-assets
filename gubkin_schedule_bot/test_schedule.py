@@ -188,3 +188,14 @@ def test_offline_reads_uploaded_cache(tmp_path):
                   encoding="utf-8")
     os.utime(cf, (time.time() - 40 * 3600,) * 2)  # прислано давно — бот предупредит
     assert c.week(mon + dt.timedelta(weeks=3), 1) == WEEK and c.stale
+
+
+def test_times_without_leading_zero_sorted():
+    week = json.loads(json.dumps(WEEK))
+    org = week["rows"]["organizations"][0]
+    org["lessonsTimeChunks"] = ["8:30-9:15", "9:15-10:00", "10:15-11:00", "11:00-11:45"]
+    ls = parse_week(week, 777, "ГМ-26-11")
+    assert [(l.date, l.start, l.end) for l in ls] == sorted((l.date, l.start, l.end) for l in ls)
+    assert ls[0].start == "08:30" and ls[0].end == "10:00"
+    tue = [l for l in ls if l.date == "2026-10-06"]
+    assert [l.start for l in tue] == ["08:30", "10:15"]  # раньше «10:15» шло раньше «8:30»: сортировка была по тексту

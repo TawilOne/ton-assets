@@ -82,6 +82,15 @@ def _teachers(lst) -> str:
     return ", ".join(out)
 
 
+def _hhmm(s: str) -> str:
+    """'8:30' -> '08:30', '8.30' -> '08:30': у некоторых групп сайт пишет время без нуля,
+    и тогда пары сортировались как текст («8:30» после «12:00»)."""
+    p = s.strip().replace(".", ":").split(":")
+    if len(p) == 2 and p[0].strip().isdigit() and p[1].strip().isdigit():
+        return f"{int(p[0]):02d}:{int(p[1]):02d}"
+    return s.strip()
+
+
 def _short_date(s: str) -> str:
     d = _parse_date(str(s))
     return d.strftime("%d.%m") if d else str(s)
@@ -112,8 +121,8 @@ def parse_week(root: dict, group_id, group_code: str = "") -> list[Lesson]:
             tc = [int(x) for x in lo.get("timeChunks") or [] if str(x).lstrip("-").isdigit()]
             if not tc or tc[0] >= len(chunks) or lo.get("weekDayNumber") is None:
                 continue
-            start = chunks[tc[0]].split("-")[0].strip()
-            end = chunks[min(tc[-1], len(chunks) - 1)].split("-")[-1].strip()
+            start = _hhmm(chunks[tc[0]].split("-")[0])
+            end = _hhmm(chunks[min(tc[-1], len(chunks) - 1)].split("-")[-1])
             wd = int(lo["weekDayNumber"])
             date = day_dates.get(wd)
             if not date:
