@@ -669,6 +669,26 @@ def _esc_html(s: str) -> str:
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+# что нажал пользователь — для статистики в /users
+ACTION_OF_FUNC = {"cmd_today": "today", "cmd_tomorrow": "tomorrow", "cmd_week": "week", "cmd_next": "next",
+                  "cmd_map": "map", "cmd_digest": "digest", "cmd_settings": "settings"}
+ACTION_OF_CMD = {"start": "start", "help": "start", "today": "today", "tomorrow": "tomorrow", "week": "week",
+                 "next": "next", "date": "date", "map": "map", "subscribe": "digest", "unsubscribe": "digest",
+                 "settings": "settings", "language": "settings", "all": "export", "captcha": "captcha"}
+
+
+def _action(update: Update) -> str | None:
+    if update.callback_query:
+        kind = (update.callback_query.data or "").split(":", 1)[0]
+        return {"lang": "settings", "sub": "digest"}.get(kind)
+    text = (update.effective_message.text or "").strip() if update.effective_message else ""
+    if text.startswith("/"):
+        return ACTION_OF_CMD.get(text[1:].split()[0].split("@")[0].lower(), "other")
+    if text in BUTTON_ACTIONS:
+        return ACTION_OF_FUNC.get(BUTTON_ACTIONS[text], "other")
+    return "text" if text else None
+
+
 async def track_user(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Запоминает каждого, кто пишет боту. О новых людях сообщает администратору."""
     user = update.effective_user
@@ -676,6 +696,7 @@ async def track_user(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     now = dt.datetime.now(MSK).strftime("%Y-%m-%d %H:%M")
     text = update.effective_message.text if update.effective_message else ""
+    action = _action(update)
     with _users_lock:
         users = _load_users()
         key = str(user.id)
@@ -683,6 +704,13 @@ async def track_user(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         u = users.setdefault(key, {"first": now, "count": 0})
         u.update(name=user.full_name, username=user.username or "", last=now,
                  count=u.get("count", 0) + 1, last_text=(text or "")[:40])
+        if action and action != "text":  # по кнопкам и по дням — для графиков в /users
+            acts = u.setdefault("acts", {})
+            acts[action] = acts.get(action, 0) + 1
+            days = u.setdefault("days", {})
+            days[now[:10]] = days.get(now[:10], 0) + 1
+            for old in sorted(days)[:-60]:  # храним 60 последних дней
+                del days[old]
         try:
             USERS_FILE.write_text(json.dumps(users, ensure_ascii=False, indent=1), encoding="utf-8")
         except OSError:
@@ -780,16 +808,30 @@ async def cmd_users(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     today = dt.datetime.now(MSK).strftime("%Y-%m-%d")
     active = sum(1 for u in users.values() if u.get("last", "").startswith(today))
-    lines = [f"👥 <b>Пользователей: {len(users)}</b> · сегодня активны: {active}", ""]
-    for uid, u in sorted(users.items(), key=lambda kv: kv[1].get("last", ""), reverse=True)[:50]:
-        last = u.get("last", "")
-        last = f"{last[8:10]}.{last[5:7]} {last[11:]}" if len(last) >= 16 else last
-        lines.append(f"• {_user_label(u)}\n   запросов: {u.get('count', 0)} · последний: {last}"
-                     f" · id <code>{uid}</code>")
-    if len(users) > 50:
-        lines.append(f"\n…и ещё {len(users) - 50}")
-    for part in _split("\n".join(lines)):
-        await update.effective_message.reply_text(part, parse_mode="HTML")
+    url = (os.environ.get("WEBAPP_URL") or _read_setting("webapp.txt") or DEFAULT_WEBAPP_URL) + \
+        f"admin.html?v={int(time.time() // 300)}#" + _admin_payload(users)
+    await update.effective_message.reply_text(
+        f"👥 Пользователей: <b>{len(users)}</b> · сегодня активны: <b>{active}</b>",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📊 Открыть статистику",
+                                                                 web_app=WebAppInfo(url))]]))
+
+
+def _admin_payload(users: dict) -> str:
+    """Данные для admin.html: сжатый JSON в части адреса после «#» — она не уходит на сервер GitHub,
+    страница читает её прямо в телефоне."""
+    import base64
+    import zlib
+    subs = _load_subs()
+    rows = []
+    for uid, u in sorted(users.items(), key=lambda kv: kv[1].get("last", ""), reverse=True)[:300]:
+        rows.append([u.get("name") or "", u.get("username") or "", u.get("count", 0), u.get("first", ""),
+                     u.get("last", ""), i18n.get_lang(uid), (subs.get(uid) or {}).get("time", ""),
+                     u.get("acts") or {}, u.get("days") or {}])
+    data = json.dumps({"now": dt.datetime.now(MSK).strftime("%Y-%m-%d %H:%M"), "u": rows},
+                      ensure_ascii=False, separators=(",", ":")).encode()
+    z = zlib.compressobj(9, zlib.DEFLATED, -15)  # «сырой» deflate — его умеет распаковать браузер
+    return base64.urlsafe_b64encode(z.compress(data) + z.flush()).decode().rstrip("=")
 
 
 async def cmd_untranslated(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
