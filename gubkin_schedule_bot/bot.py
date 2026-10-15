@@ -547,7 +547,6 @@ async def sync_watch_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         st = json.loads(SYNC_STATUS_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         st = {}
-    state = ctx.bot_data.setdefault("sync_watch", {})
     msg, key = None, None
     # капча бывает разовой: ноутбук попробует снова через 3 часа. Пишем, только если из-за неё
     # расписание не обновляется уже больше суток, и не чаще раза в день
@@ -565,8 +564,17 @@ async def sync_watch_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         msg = (f"📅 Расписание на сервере обновлялось {_ago(age)}. Включите ноутбук с интернетом "
                "или запустите sync_now.bat.")
         key = "old:" + dt.date.today().isoformat()  # не чаще раза в день
-    if msg and state.get("last") != key:
-        state["last"] = key
+    # последнее предупреждение запоминаем в файле — после перезапуска бота (update.sh) не повторяем его
+    alert_file = DATA_DIR / "sync_alert.txt"
+    try:
+        last_key = alert_file.read_text(encoding="utf-8").strip()
+    except OSError:
+        last_key = ""
+    if msg and last_key != key:
+        try:
+            alert_file.write_text(key, encoding="utf-8")
+        except OSError:
+            pass
         try:
             await ctx.bot.send_message(admin, msg)
         except Exception as e:

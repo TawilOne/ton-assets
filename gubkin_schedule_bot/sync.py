@@ -137,7 +137,8 @@ def download(interactive: bool) -> int:
     failed: dict[dt.date, str] = {}
     fetched = 0
     for i, mon in enumerate(weeks, 1):
-        if not interactive and not due(mon, this_monday, gid):
+        # и вручную, и по расписанию качаем только то, что пора обновить: чем меньше запросов, тем реже капча
+        if mon != this_monday and not due(mon, this_monday, gid):
             continue
         fetched += 1
         bot.client.stale = False
