@@ -259,8 +259,7 @@ async def cmd_group(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         else:
             await _ask_group(update, i18n.t("group_unknown", lang, code=normalize_code(code)))
         return
-    grp = _user_group(update)
-    await _ask_group(update, i18n.t("group_current", lang, code=grp["code"]) if grp else i18n.t("group_none", lang))
+    await _ask_group(update)
 
 
 async def _group_chosen(update: Update, grp: dict) -> None:
