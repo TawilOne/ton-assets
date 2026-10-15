@@ -397,3 +397,11 @@ def test_blocked_users_counted(env, monkeypatch):
     u.callback_query = None
     run(bot.track_user(u, ctx()))  # написал боту — значит, разблокировал
     assert not bot._load_users()["2"].get("blocked")
+
+
+def test_group_name_above_schedule(env):
+    bot._set_user_group(8, "ГМ-26-12")
+    u = update(uid=8)
+    run(bot.cmd_today(u, ctx()))
+    text = u.effective_message.sent[-1][0]
+    assert text.startswith("👥 <b>ГМ-26-12</b>\n\n📅 ") and "Физика" in text

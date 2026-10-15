@@ -371,11 +371,18 @@ def _today() -> dt.date:
     return dt.datetime.now(MSK).date()
 
 
+def _group_head(grp: dict) -> str:
+    """Подпись над расписанием — чья это группа."""
+    return f"👥 <b>{_esc_html(grp['code'])}</b>\n\n"
+
+
 async def _show(update: Update, start: dt.date, end: dt.date, empty_key: str) -> None:
-    lessons = await _run(update, start, end)
+    grp = _user_group(update)
+    lessons = await _run(update, start, end, grp)
     if lessons is not None:
         lang = _lang(update)
-        await _send_text(update, to_html(lessons, i18n.t(empty_key, lang), today=_today(), lang=lang), html=True)
+        await _send_text(update, _group_head(grp) + to_html(lessons, i18n.t(empty_key, lang), today=_today(),
+                                                            lang=lang), html=True)
 
 
 # Кнопки внизу чата: ключ текста кнопки (i18n.TEXT) -> имя функции-команды
@@ -592,7 +599,9 @@ async def cmd_map(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
          "v": int(time.time() // 300)})  # новый адрес раз в 5 минут — Telegram не держит старую версию страницы
     button = InlineKeyboardMarkup([[InlineKeyboardButton(i18n.t("open_map", lang), web_app=WebAppInfo(url))]])
     note = "\n\n" + i18n.t("map_note", lang)
-    await update.effective_message.reply_text(("\n".join(lines) or title) + note, reply_markup=button)
+    grp = _user_group(update)
+    head = f"👥 {grp['code']}\n\n" if grp else ""
+    await update.effective_message.reply_text(head + ("\n".join(lines) or title) + note, reply_markup=button)
 
 
 # ---- рассылка расписания в выбранное время
@@ -729,7 +738,7 @@ async def digest_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
             if not lessons:  # пар нет — не беспокоим
                 texts[key] = None
             else:
-                texts[key] = head + "\n\n" + to_html(lessons, today=now.date(), lang=lang)
+                texts[key] = head + "\n" + _group_head(grp) + to_html(lessons, today=now.date(), lang=lang)
         with _subs_lock:  # отмечаем сразу, чтобы не прислать повторно
             subs = _load_subs()
             if chat_id in subs:
