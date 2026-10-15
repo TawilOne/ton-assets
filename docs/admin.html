@@ -212,8 +212,8 @@ function render() {
   const maxAct = Math.max(1, ...actRows.map(r => r[1]));
 
   let list = users.filter(u => !query || (u.name + " " + u.username).toLowerCase().includes(query));
-  list.sort(sortBy === "clicks" ? (a, b) => b.count - a.count : sortBy === "new" ? (a, b) => b.first.localeCompare(a.first)
-                                : (a, b) => b.last.localeCompare(a.last));
+  list.sort(sortBy === "clicks" ? (a, b) => b.count - a.count : sortBy === "clicks-asc" ? (a, b) => a.count - b.count
+          : sortBy === "new" ? (a, b) => b.first.localeCompare(a.first) : (a, b) => b.last.localeCompare(a.last));
 
   document.getElementById("app").innerHTML = `
     <div class="kpis">
@@ -245,7 +245,7 @@ function render() {
       <input class="search" id="q" placeholder="Поиск по имени или @нику" value="${esc(query)}">
       <div class="sort">
         <button data-s="last" class="${sortBy === "last" ? "on" : ""}">Недавние</button>
-        <button data-s="clicks" class="${sortBy === "clicks" ? "on" : ""}">Больше кликов</button>
+        <button data-s="clicks" class="${sortBy.startsWith("clicks") ? "on" : ""}">Клики ${sortBy === "clicks-asc" ? "↑" : "↓"}</button>
         <button data-s="new" class="${sortBy === "new" ? "on" : ""}">Новые</button>
       </div>
       ${list.slice(0, shown).map(u => {
@@ -277,7 +277,10 @@ function render() {
 
   const q = document.getElementById("q");
   q.oninput = () => { query = q.value.trim().toLowerCase(); shown = 30; render(); const q2 = document.getElementById("q"); q2.focus(); q2.setSelectionRange(q2.value.length, q2.value.length); };
-  document.querySelectorAll(".sort button").forEach(b => b.onclick = () => { sortBy = b.dataset.s; shown = 30; render(); });
+  // «Клики»: первое нажатие — по убыванию, повторное — по возрастанию и обратно
+  document.querySelectorAll(".sort button").forEach(b => b.onclick = () => {
+    sortBy = b.dataset.s === "clicks" && sortBy === "clicks" ? "clicks-asc" : b.dataset.s; shown = 30; render();
+  });
   const more = document.getElementById("more");
   if (more) more.onclick = () => { shown += 50; render(); };
 }
