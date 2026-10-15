@@ -23,7 +23,7 @@ import json
 from dataclasses import asdict, dataclass, field
 
 import i18n
-from gubkin_api import GubkinClient, normalize_code
+from gubkin_api import CaptchaRequired, GubkinClient, GubkinError, normalize_code
 
 WEEKDAYS = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
 
@@ -156,6 +156,50 @@ def parse_week(root: dict, group_id, group_code: str = "") -> list[Lesson]:
     return lessons
 
 
+# поля ответа сайта, которые читает parse_week — остальное в кэше не храним (кэш всего факультета
+# в десятки раз больше, чем одной группы, и целиком пересылается с ноутбука на сервер)
+_LESSON_KEYS = ("weekDayNumber", "timeChunks", "name", "type", "subgroup", "isCanceled", "isCancelled",
+                "isMoved", "movedFrom", "movedTo")
+_PERSON_KEYS = ("lastName", "firstName", "middleName", "patronymic", "fullName", "name")
+
+
+def _pick(obj, keys):
+    if not isinstance(obj, dict):
+        return obj
+    return {k: obj[k] for k in keys if obj.get(k) not in (None, "", [], {})}
+
+
+def slim_week(root: dict) -> dict:
+    """Ответ act=schedule без лишних полей: parse_week по нему даёт ровно то же самое."""
+    rows = root.get("rows") if isinstance(root, dict) else None
+    if not isinstance(rows, dict):
+        return root
+    wr = (rows.get("week") or {}).get("weekRussia") or {}
+    orgs = []
+    for org in rows.get("organizations") or []:
+        if not isinstance(org, dict):
+            continue
+        lessons = []
+        for lo in org.get("lessons") or []:
+            if not isinstance(lo, dict):
+                continue
+            x = _pick(lo, _LESSON_KEYS)
+            if isinstance(lo.get("course"), dict):
+                x["course"] = _pick(lo["course"], ("name", "additionalInfo"))
+            for k in ("rooms", "teachers", "groups"):
+                if lo.get(k):
+                    keys = {"rooms": ("number", "name"), "teachers": _PERSON_KEYS, "groups": ("id", "code", "name")}[k]
+                    x[k] = [_pick(v, keys) for v in lo[k]]
+            ch = lo.get("changes")
+            if isinstance(ch, dict) and (ch.get("rooms") or ch.get("teachers")):
+                x["changes"] = {k: [_pick(v, ("number", "name") if k == "rooms" else _PERSON_KEYS) for v in ch[k]]
+                                for k in ("rooms", "teachers") if ch.get(k)}
+            lessons.append(x)
+        orgs.append({"lessonsTimeChunks": org.get("lessonsTimeChunks") or [], "lessons": lessons})
+    week = {"type": wr.get("type"), "days": [_pick(d, ("date", "weekDayNumber")) for d in wr.get("days") or []]}
+    return {"state": root.get("state", True), "rows": {"week": {"weekRussia": week}, "organizations": orgs}}
+
+
 def semester_bounds(today: dt.date | None = None) -> tuple[dt.date, dt.date]:
     """Осенний семестр: 1 сентября – 31 января; весенний: 1 февраля – 30 июня (включая сессию)."""
     today = today or dt.date.today()
@@ -168,15 +212,30 @@ def semester_bounds(today: dt.date | None = None) -> tuple[dt.date, dt.date]:
 
 def fetch_range(client: GubkinClient, group_id, group_code: str,
                 start: dt.date, end: dt.date, progress=None) -> list[Lesson]:
-    """Скачивает все недели, пересекающие [start, end]."""
+    """Скачивает все недели, пересекающие [start, end]. В длинном периоде (семестр для /all и /stats)
+    недели, которых нет (сайт отвечает ошибкой на летние недели), пропускаются; ошибка — только если
+    не нашлось ни одной."""
     monday = start - dt.timedelta(days=start.weekday())
     out: list[Lesson] = []
     weeks = (end - monday).days // 7 + 1
+    got, error = 0, None
     for i in range(weeks):
         day = monday + dt.timedelta(weeks=i)
-        out += parse_week(client.week(day, group_id), group_id, group_code)
+        try:
+            data = client.week(day, group_id)
+        except CaptchaRequired:
+            raise
+        except GubkinError as e:
+            if weeks <= 2:
+                raise
+            error = e
+            continue
+        got += 1
+        out += parse_week(data, group_id, group_code)
         if progress:
             progress(i + 1, weeks)
+    if not got and error:
+        raise error
     s, e = start.isoformat(), end.isoformat()
     return [l for l in out if s <= l.date <= e]
 

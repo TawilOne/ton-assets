@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Telegram-бот расписания РГУ им. Губкина для группы ГМ-26-11 (факультет геологии).
+"""Telegram-бот расписания РГУ им. Губкина для всех групп факультета геологии.
+Каждый пользователь выбирает свою группу (/group); по умолчанию — ГМ-26-11.
 
 Запуск:  BOT_TOKEN=123:abc python bot.py
 Переменные окружения:
     BOT_TOKEN     — токен от @BotFather (обязательно)
-    GROUP_CODE    — код группы (по умолчанию ГМ-26-11)
-    GROUP_ID      — id группы на сайте, если известен (иначе найдётся по коду)
+    GROUP_CODE    — группа по умолчанию (ГМ-26-11): по ней ищется факультет, её получают
+                    пользователи, которые пришли до появления выбора группы
+    GROUP_ID      — id этой группы на сайте, если известен (иначе найдётся по коду)
     FACULTY_HINT  — подстрока названия факультета для поиска (по умолчанию «геолог»)
     TG_PROXY      — прокси только для Telegram, если api.telegram.org недоступен
                     (например socks5://127.0.0.1:1080 или http://host:port).
@@ -38,12 +40,12 @@ from telegram.ext import (Application, CallbackQueryHandler, CommandHandler, Con
 
 import i18n
 import my_commands as my
-from gubkin_api import CaptchaRequired, GubkinClient, GubkinError
-from schedule import (_minutes, fetch_range, locate_room, semester_bounds, to_csv, to_html, to_ics,
-                      to_json, to_text)
+from gubkin_api import CaptchaRequired, GubkinClient, GubkinError, normalize_code
+from schedule import (_minutes, fetch_range, locate_room, semester_bounds, slim_week, to_csv, to_html,
+                      to_ics, to_json, to_text)
 
 MSK = ZoneInfo("Europe/Moscow")
-GROUP_CODE = os.environ.get("GROUP_CODE", "ГМ-26-11")
+GROUP_CODE = normalize_code(os.environ.get("GROUP_CODE", "ГМ-26-11"))
 FACULTY_HINT = os.environ.get("FACULTY_HINT", "геолог")
 TG_LIMIT = 4000
 MORNING = dt.time(7, 0, tzinfo=MSK)  # время утренней рассылки
@@ -55,21 +57,14 @@ client = GubkinClient(cookie_file=str(DATA_DIR / "cookies.json"), cache_file=str
                       fallback_proxy=os.environ.get("GUBKIN_PROXY"),  # запасной путь к сайту, если напрямую не пускает
                       proxy=os.environ.get("GUBKIN_PROXY_ALWAYS"),  # на сервере: всегда через прокси
                       offline=os.environ.get("GUBKIN_OFFLINE") == "1")  # расписание присылает ноутбук (sync.py)
-GROUP_FILE = DATA_DIR / "group.json"
+client.slim = slim_week  # в кэше — только нужные поля: кэш всего факультета большой
+GROUP_FILE = DATA_DIR / "group.json"  # группа по умолчанию и её факультет
+GROUPS_FILE = DATA_DIR / "groups.json"  # все группы факультета — присылает ноутбук (sync.py)
+USER_GROUPS_FILE = DATA_DIR / "user_groups.json"  # кто какую группу выбрал: {id пользователя: "ГМ-26-11"}
 USERS_FILE = DATA_DIR / "users.json"  # кто пользуется ботом (видно только администратору)
 _users_lock = threading.Lock()
 _lock = threading.Lock()  # одна сессия сайта на всех — запросы по очереди
 _group: dict = {"id": os.environ.get("GROUP_ID"), "code": GROUP_CODE, "faculty": ""}
-
-HELP = (
-    f"📅 Расписание РГУ им. Губкина, группа {GROUP_CODE}\n\n"
-    "/today — на сегодня\n"
-    "/tomorrow — на завтра\n"
-    "/week — текущая неделя\n"
-    "/subscribe — присылать расписание в выбранное время\n"
-    "/settings — язык"
-)
-
 
 def _ensure_group() -> None:
     if _group["id"]:
@@ -77,12 +72,13 @@ def _ensure_group() -> None:
     try:  # найденная группа запоминается в файл — не ищем её на сайте при каждом запуске
         saved = json.loads(GROUP_FILE.read_text(encoding="utf-8"))
         if saved.get("code_wanted") == GROUP_CODE and saved.get("id"):
-            _group.update(id=saved["id"], code=saved["code"], faculty=saved.get("faculty", ""))
+            _group.update(id=saved["id"], code=saved["code"], faculty=saved.get("faculty", ""),
+                          faculty_id=saved.get("faculty_id"))
             return
     except (OSError, ValueError):
         pass
     f, g = client.find_group(GROUP_CODE, FACULTY_HINT)
-    _group.update(id=g["id"], code=g.get("code") or GROUP_CODE, faculty=f.get("name", ""))
+    _group.update(id=g["id"], code=g.get("code") or GROUP_CODE, faculty=f.get("name", ""), faculty_id=f.get("id"))
     log.info("group %s id=%s faculty=%s", _group["code"], _group["id"], _group["faculty"])
     try:
         GROUP_FILE.write_text(json.dumps({**_group, "code_wanted": GROUP_CODE}, ensure_ascii=False),
@@ -96,12 +92,213 @@ def _locked(func, *args):
         return func(*args)
 
 
-def _fetch(start: dt.date, end: dt.date):
+def _fetch(start: dt.date, end: dt.date, grp: dict):
+    """Пары группы grp ({"id", "code"}) с start по end и признак «взято из старого сохранённого»."""
     with _lock:
-        _ensure_group()
+        gid = grp.get("id")
+        if not gid:  # группа по умолчанию, а список групп ещё не пришёл — id из group.json / с сайта
+            _ensure_group()
+            gid = _group["id"]
         client.stale = False
-        lessons = fetch_range(client, _group["id"], _group["code"], start, end)
+        lessons = fetch_range(client, gid, grp["code"], start, end)
         return lessons, client.stale
+
+
+# ---- группы факультета и выбор группы
+
+_groups_cache: dict = {"mtime": None, "list": []}
+_ug_lock = threading.Lock()
+
+
+def _faculty_groups() -> list[dict]:
+    """Все группы факультета [{"id": "10706", "code": "ГМ-26-11"}, ...], отсортированные по коду.
+    Список присылает ноутбук (groups.json); пока его нет — только группа по умолчанию."""
+    try:
+        mtime = GROUPS_FILE.stat().st_mtime
+    except OSError:
+        mtime = None
+    if mtime != _groups_cache["mtime"]:
+        found: dict[str, dict] = {}
+        try:
+            for g in json.loads(GROUPS_FILE.read_text(encoding="utf-8")).get("groups") or []:
+                code = normalize_code(str(g.get("code") or ""))
+                if g.get("id") and code and code not in found:
+                    found[code] = {"id": str(g["id"]), "code": code}
+        except (OSError, ValueError, AttributeError, TypeError):
+            found = {}
+        _groups_cache.update(mtime=mtime, list=[found[c] for c in sorted(found)])
+    groups = list(_groups_cache["list"])
+    if not any(g["code"] == GROUP_CODE for g in groups):
+        groups.append(_default_group())
+        groups.sort(key=lambda g: g["code"])
+    return groups
+
+
+def _default_group() -> dict:
+    gid = _group["id"]
+    if not gid:
+        try:
+            saved = json.loads(GROUP_FILE.read_text(encoding="utf-8"))
+            if normalize_code(saved.get("code_wanted") or "") == GROUP_CODE:
+                gid = saved.get("id")
+        except (OSError, ValueError, AttributeError):
+            pass
+    return {"id": str(gid) if gid else None, "code": GROUP_CODE}
+
+
+def _find_group(code: str) -> dict | None:
+    code = normalize_code(code or "")
+    return next((g for g in _faculty_groups() if g["code"] == code), None) if code else None
+
+
+def _load_user_groups() -> dict[str, str]:
+    try:
+        data = json.loads(USER_GROUPS_FILE.read_text(encoding="utf-8"))
+        return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _set_user_group(user_id, code: str) -> None:
+    with _ug_lock:
+        data = _load_user_groups()
+        data[str(user_id)] = code
+        try:
+            USER_GROUPS_FILE.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        except OSError:
+            log.warning("cannot save %s", USER_GROUPS_FILE)
+
+
+def _migrate_user_groups() -> None:
+    """Один раз, при первом запуске с выбором групп: все, кто уже пользовался ботом,
+    получают ГМ-26-11 — раньше бот показывал только её."""
+    if USER_GROUPS_FILE.exists():
+        return
+    old = set(_load_users()) | set(_load_subs())
+    try:
+        USER_GROUPS_FILE.write_text(json.dumps({uid: GROUP_CODE for uid in sorted(old)}, ensure_ascii=False),
+                                    encoding="utf-8")
+        log.info("выбор групп: %d прежних пользователей получили группу %s", len(old), GROUP_CODE)
+    except OSError:
+        log.warning("cannot save %s", USER_GROUPS_FILE)
+
+
+def _group_of(user_id) -> dict | None:
+    """Группа пользователя или None, если он её ещё не выбрал."""
+    code = _load_user_groups().get(str(user_id))
+    if not code:
+        return None
+    # группа могла пропасть из списка (расформировали) — тогда считаем, что не выбрана
+    return _find_group(code)
+
+
+def _user_group(update: Update) -> dict | None:
+    return _group_of(update.effective_user.id) if update.effective_user else None
+
+
+def _year(code: str) -> int | None:
+    """'ГМ-26-11' -> 26 (год поступления)."""
+    m = re.search(r"-(\d{2})-", code)
+    return int(m.group(1)) if m else None
+
+
+def _year_label(year, lang: str) -> str:
+    if year is None:
+        return i18n.t("groups_other", lang)
+    today = _today()
+    first = (today.year if today.month >= 8 else today.year - 1) % 100  # учебный год начинается в сентябре
+    n = first - year + 1
+    return i18n.course(n, lang) if 1 <= n <= 6 else f"20{year:02d}"
+
+
+def _by_year() -> list[tuple]:
+    """[(год поступления или None, [группы])], первый курс — первым."""
+    out: dict = {}
+    for g in _faculty_groups():
+        out.setdefault(_year(g["code"]), []).append(g)
+    return sorted(out.items(), key=lambda kv: (kv[0] is None, -(kv[0] or 0)))
+
+
+def _rows(buttons: list, n: int = 3) -> list[list]:
+    return [buttons[i:i + n] for i in range(0, len(buttons), n)]
+
+
+def _picker(lang: str, year: str | None = None) -> tuple[str, InlineKeyboardMarkup]:
+    """Выбор группы: сначала курс, потом группа. Если курс один — сразу группы."""
+    years = _by_year()
+    note = "" if _groups_cache["list"] else "\n\n" + i18n.t("group_list_loading", lang)
+    if year is None and len(years) > 1:
+        buttons = [InlineKeyboardButton(_year_label(y, lang), callback_data=f"grp:y:{'' if y is None else y}")
+                   for y, _ in years]
+        return i18n.t("group_choose_year", lang) + note, InlineKeyboardMarkup(_rows(buttons))
+    wanted = None if year in (None, "") else int(year)
+    groups = next((gs for y, gs in years if y == wanted), None) if len(years) > 1 else years[0][1]
+    groups = groups or []
+    buttons = [InlineKeyboardButton(g["code"], callback_data=f"grp:s:{g['code']}")
+               for g in groups if len(f"grp:s:{g['code']}".encode()) <= 64][:96]  # ограничения Telegram
+    rows = _rows(buttons)
+    if len(years) > 1:
+        rows.append([InlineKeyboardButton(i18n.t("btn_back", lang), callback_data="grp:b")])
+    return i18n.t("group_choose", lang) + note, InlineKeyboardMarkup(rows)
+
+
+async def _ask_group(update: Update, head: str = "") -> None:
+    lang = _lang(update)
+    text, markup = _picker(lang)
+    await update.effective_message.reply_text((head + "\n\n" if head else "") + text, reply_markup=markup)
+
+
+async def cmd_group(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """/group — выбрать группу; /group ГМ-26-12 — сразу задать."""
+    lang = _lang(update)
+    if ctx.args:
+        code = " ".join(ctx.args)
+        grp = _find_group(code)
+        if grp:
+            await _group_chosen(update, grp)
+        else:
+            await _ask_group(update, i18n.t("group_unknown", lang, code=normalize_code(code)))
+        return
+    grp = _user_group(update)
+    await _ask_group(update, i18n.t("group_current", lang, code=grp["code"]) if grp else i18n.t("group_none", lang))
+
+
+async def _group_chosen(update: Update, grp: dict) -> None:
+    lang = _lang(update)
+    _set_user_group(update.effective_user.id, grp["code"])
+    text = i18n.t("group_set", lang, code=grp["code"])
+    if client.offline and grp["id"] and not client.has_group(grp["id"]):
+        text += "\n\n" + i18n.t("group_pending", lang, code=grp["code"])
+    # новое сообщение, а не правка старого: только так приходит нижняя панель кнопок
+    await update.effective_message.reply_text(text, reply_markup=keyboard(lang))
+
+
+async def on_group(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    q = update.callback_query
+    lang = _lang(update)
+    _, act, arg = ((q.data or "") + "::").split(":")[:3]
+    await q.answer()
+    if act == "s":
+        grp = _find_group(arg)
+        if not grp:  # список групп обновился, а кнопки старые
+            text, markup = _picker(lang)
+            await _edit(q, text, markup)
+            return
+        await _edit(q, i18n.t("group_current", lang, code=grp["code"]), None)
+        await _group_chosen(update, grp)
+    elif act == "y":
+        await _edit(q, *_picker(lang, arg))
+    elif act == "menu":  # кнопка в настройках — выбор группы новым сообщением
+        await _ask_group(update)
+    else:  # "b" — назад к курсам
+        await _edit(q, *_picker(lang))
+
+
+async def _edit(q, text: str, markup) -> None:
+    try:
+        await q.edit_message_text(text, reply_markup=markup)
+    except Exception:  # сообщение не изменилось или слишком старое
+        pass
 
 
 def _lang(update: Update) -> str:
@@ -109,16 +306,23 @@ def _lang(update: Update) -> str:
     return i18n.get_lang(update.effective_user.id) if update.effective_user else "ru"
 
 
-async def _run(update: Update, start: dt.date, end: dt.date):
+async def _run(update: Update, start: dt.date, end: dt.date, grp: dict | None = None):
     lang = _lang(update)
+    grp = grp or _user_group(update)
+    if not grp:  # группа ещё не выбрана — сначала выбор группы
+        await _ask_group(update, i18n.t("group_first", lang))
+        return None
+    if client.offline and grp["id"] and not client.has_group(grp["id"]):
+        await update.effective_message.reply_text(i18n.t("group_pending", lang, code=grp["code"]))
+        return None
     try:
         await update.effective_chat.send_action("typing")  # «печатает…», пока грузим с сайта
     except Exception:
         pass
     t0 = time.monotonic()
     try:
-        lessons, stale = await asyncio.to_thread(_fetch, start, end)
-        log.info("schedule %s..%s loaded in %.1f s%s", start, end, time.monotonic() - t0,
+        lessons, stale = await asyncio.to_thread(_fetch, start, end, grp)
+        log.info("schedule %s %s..%s loaded in %.1f s%s", grp["code"], start, end, time.monotonic() - t0,
                  " (из сохранённого, сайт не ответил)" if stale else "")
         if stale and client.offline:
             await update.effective_message.reply_text(
@@ -178,13 +382,14 @@ async def _show(update: Update, start: dt.date, end: dt.date, empty_key: str) ->
 BUTTONS = [
     [("btn_today", "cmd_today"), ("btn_tomorrow", "cmd_tomorrow")],
     [("btn_week", "cmd_week"), ("btn_next", "cmd_next")],
-    [("btn_digest", "cmd_digest")],  # рассылка в выбранное время
+    [("btn_digest", "cmd_digest"), ("btn_group", "cmd_group")],  # рассылка в выбранное время, выбор группы
     [("btn_map", "cmd_map")],  # карта — главная кнопка, одна во всю ширину, последней строкой
 ]
 # настройки — не в нижней панели, а в меню команд Telegram (кнопка «Меню») и командой /settings;
 # текст кнопки на любом языке -> команда (кнопки старой клавиатуры тоже работают)
 BUTTON_ACTIONS = {i18n.t(key, lang): func for row in BUTTONS + [[("btn_settings", "cmd_settings")]]
                   for key, func in row for lang in i18n.LANGS}
+BUTTON_ACTIONS["⏰ Рассылка расписания"] = "cmd_digest"  # прежний текст кнопки — у тех, кто не обновил панель
 
 
 def keyboard(lang: str = "ru") -> ReplyKeyboardMarkup:
@@ -195,14 +400,20 @@ def keyboard(lang: str = "ru") -> ReplyKeyboardMarkup:
 KEYBOARD = keyboard("ru")
 
 
-def help_text(lang: str) -> str:
-    return HELP if lang == "ru" else i18n.t("help", lang, group=GROUP_CODE)
+def _group_line(grp: dict | None, lang: str) -> str:
+    return i18n.t("group_current", lang, code=grp["code"]) if grp else i18n.t("group_none", lang)
+
+
+def help_text(lang: str, grp: dict | None = None) -> str:
+    return i18n.t("help", lang, group_line=_group_line(grp, lang))
 
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    lang = _lang(update)
-    await update.effective_message.reply_text(help_text(lang) + "\n\n" + i18n.t("beta", lang),
+    lang, grp = _lang(update), _user_group(update)
+    await update.effective_message.reply_text(help_text(lang, grp) + "\n\n" + i18n.t("beta", lang),
                                               reply_markup=keyboard(lang), disable_web_page_preview=True)
+    if not grp:  # новый пользователь — сразу предлагаем выбрать группу
+        await _ask_group(update)
 
 
 # ---- настройки: язык
@@ -210,12 +421,13 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 def _settings_markup(lang: str, chat_id) -> InlineKeyboardMarkup:
     langs = [InlineKeyboardButton(("• " if code == lang else "") + name, callback_data=f"lang:{code}")
              for code, name in i18n.LANG_NAMES.items()]
-    return InlineKeyboardMarkup([langs] + _sub_markup(lang, str(chat_id) in _load_subs()))
+    group = [[InlineKeyboardButton(i18n.t("btn_group_change", lang), callback_data="grp:menu")]]
+    return InlineKeyboardMarkup([langs] + group + _sub_markup(lang, str(chat_id) in _load_subs()))
 
 
 def _settings_text(lang: str, chat_id) -> str:
     head, choose = i18n.t("settings", lang, name=i18n.LANG_NAMES[lang]).split("\n\n", 1)
-    return f"{head}\n{_sub_status(chat_id, lang)}\n\n{choose}"
+    return f"{head}\n{_group_line(_group_of(chat_id), lang)}\n{_sub_status(chat_id, lang)}\n\n{choose}"
 
 
 async def cmd_settings(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -271,16 +483,19 @@ async def cmd_date(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_all(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    lang = _lang(update)
+    lang, grp = _lang(update), _user_group(update)
+    if not grp:
+        await _ask_group(update, i18n.t("group_first", lang))
+        return
     start, end = semester_bounds(_today())
     msg = await update.effective_message.reply_text(
-        i18n.t("export_wait", lang, group=GROUP_CODE, a=f"{start:%d.%m.%Y}", b=f"{end:%d.%m.%Y}"))
-    lessons = await _run(update, start, end)
+        i18n.t("export_wait", lang, group=grp["code"], a=f"{start:%d.%m.%Y}", b=f"{end:%d.%m.%Y}"))
+    lessons = await _run(update, start, end, grp)
     if lessons is None:
         return
-    code = _group["code"]
+    code = grp["code"]
     stem = f"{code}_{start}_{end}"
-    meta = {"group": code, "group_id": _group["id"], "faculty": _group["faculty"],
+    meta = {"group": code, "group_id": grp["id"] or _group["id"], "faculty": _group.get("faculty") or "",
             "from": str(start), "to": str(end)}
     files = [
         (f"{stem}.ics", to_ics(lessons, i18n.t("export_title", lang, group=code)), i18n.t("file_ics", lang)),
@@ -316,8 +531,12 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await _set_time(update, ctx, text)
         return
     if not ctx.user_data.pop("captcha", False):
+        grp = _find_group(text) if len(text) <= 20 else None
+        if grp:  # написали код группы, например «ГМ-26-12» — выбираем её
+            await _group_chosen(update, grp)
+            return
         lang = _lang(update)
-        await update.effective_message.reply_text(help_text(lang), reply_markup=keyboard(lang))
+        await update.effective_message.reply_text(help_text(lang, _user_group(update)), reply_markup=keyboard(lang))
         return
     try:
         ok = await asyncio.to_thread(_locked, client.validate_captcha, update.effective_message.text)
@@ -345,7 +564,7 @@ async def cmd_map(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     lessons = [l for l in lessons if not l.cancelled]
     if not any(l.end and _minutes(l.end) > now_min for l in lessons):  # сегодня пар больше нет — берём завтра
         day = day + dt.timedelta(days=1)
-        lessons = await _run(update, day, day)
+        lessons = await _run(update, day, day, _user_group(update))
         if lessons is None:
             return
         lessons = [l for l in lessons if not l.cancelled]
@@ -496,17 +715,20 @@ async def digest_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         evening = at >= EVENING
         d = now.date() + dt.timedelta(days=1 if evening else 0)
         lang = i18n.get_lang(chat_id)  # в личном чате id чата = id пользователя
-        key = (d, lang)
+        grp = _group_of(chat_id)
+        if not grp:  # группа не выбрана — присылать нечего
+            continue
+        head = i18n.t("evening" if evening else "morning" if at < 12 * 60 else "digest_today", lang)
+        key = (d, lang, grp["code"], head)
         if key not in texts:
             try:
-                lessons, _ = await asyncio.to_thread(_fetch, d, d)
-            except (GubkinError, OSError):
-                log.exception("digest fetch failed")
-                return
+                lessons, _ = await asyncio.to_thread(_fetch, d, d, grp)
+            except (GubkinError, OSError) as e:  # у этой группы пока нет расписания — попробуем через полминуты
+                log.warning("digest %s: %s", grp["code"], e)
+                continue
             if not lessons:  # пар нет — не беспокоим
                 texts[key] = None
             else:
-                head = i18n.t("evening" if evening else "morning" if at < 12 * 60 else "digest_today", lang)
                 texts[key] = head + "\n\n" + to_html(lessons, today=now.date(), lang=lang)
         with _subs_lock:  # отмечаем сразу, чтобы не прислать повторно
             subs = _load_subs()
@@ -526,12 +748,18 @@ async def prefetch_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Заранее подгружает текущую и следующую неделю в кэш — тогда /today, /week и кнопки
     отвечают мгновенно, без ожидания сайта."""
     mon = _today() - dt.timedelta(days=_today().weekday())
-    try:
-        await asyncio.to_thread(_fetch, mon, mon + dt.timedelta(days=13))
-    except CaptchaRequired:
-        log.warning("prefetch: сайт просит капчу — отправьте боту /captcha")
-    except (GubkinError, OSError) as e:
-        log.warning("prefetch failed: %s", e)
+    codes = sorted(set(_load_user_groups().values()) | {GROUP_CODE})
+    for code in codes[:20]:  # не больше 20 групп за раз — частые запросы вызывают капчу
+        grp = _find_group(code)
+        if not grp:
+            continue
+        try:
+            await asyncio.to_thread(_fetch, mon, mon + dt.timedelta(days=13), grp)
+        except CaptchaRequired:
+            log.warning("prefetch: сайт просит капчу — отправьте боту /captcha")
+            return
+        except (GubkinError, OSError) as e:
+            log.warning("prefetch %s failed: %s", code, e)
 
 
 SYNC_STATUS_FILE = DATA_DIR / "sync_status.json"
@@ -679,10 +907,11 @@ def _esc_html(s: str) -> str:
 
 # что нажал пользователь — для статистики в /users
 ACTION_OF_FUNC = {"cmd_today": "today", "cmd_tomorrow": "tomorrow", "cmd_week": "week", "cmd_next": "next",
-                  "cmd_map": "map", "cmd_digest": "digest", "cmd_settings": "settings"}
+                  "cmd_map": "map", "cmd_digest": "digest", "cmd_settings": "settings", "cmd_group": "group"}
 ACTION_OF_CMD = {"start": "start", "help": "start", "today": "today", "tomorrow": "tomorrow", "week": "week",
                  "next": "next", "date": "date", "map": "map", "subscribe": "digest", "unsubscribe": "digest",
-                 "settings": "settings", "language": "settings", "all": "export", "captcha": "captcha"}
+                 "settings": "settings", "language": "settings", "all": "export", "captcha": "captcha",
+                 "group": "group"}
 
 
 ADMIN_CMDS = {"users", "broadcast", "untranslated", "myid"}
@@ -691,7 +920,7 @@ ADMIN_CMDS = {"users", "broadcast", "untranslated", "myid"}
 def _action(update: Update) -> str | None:
     if update.callback_query:
         kind = (update.callback_query.data or "").split(":", 1)[0]
-        return {"lang": "settings", "sub": "digest"}.get(kind)
+        return {"lang": "settings", "sub": "digest", "grp": "group"}.get(kind)
     text = (update.effective_message.text or "").strip() if update.effective_message else ""
     if text.startswith("/"):
         cmd = text[1:].split()[0].split("@")[0].lower() if len(text) > 1 else ""
@@ -836,12 +1065,12 @@ def _admin_payload(users: dict) -> str:
     В «#» класть нельзя: Telegram дописывает туда свои параметры."""
     import base64
     import zlib
-    subs = _load_subs()
+    subs, groups = _load_subs(), _load_user_groups()
     rows = []
     for uid, u in sorted(users.items(), key=lambda kv: kv[1].get("last", ""), reverse=True)[:300]:
         rows.append([u.get("name") or "", u.get("username") or "", u.get("count", 0), u.get("first", ""),
                      u.get("last", ""), i18n.get_lang(uid), (subs.get(uid) or {}).get("time", ""),
-                     u.get("acts") or {}, u.get("days") or {}])
+                     u.get("acts") or {}, u.get("days") or {}, groups.get(uid, "")])
     data = json.dumps({"now": dt.datetime.now(MSK).strftime("%Y-%m-%d %H:%M"), "u": rows},
                       ensure_ascii=False, separators=(",", ":")).encode()
     z = zlib.compressobj(9, zlib.DEFLATED, -15)  # «сырой» deflate — его умеет распаковать браузер
@@ -858,7 +1087,7 @@ async def cmd_untranslated(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
     with _lock:
         for (_, gid), (_, data) in list(client._cache.items()):
             try:
-                names.update(l.subject for l in parse_week(data, gid, _group.get("code") or ""))
+                names.update(l.subject for l in parse_week(data, gid))
             except Exception:
                 continue
     missing = sorted(n for n in names if n and not i18n.has_subject(n))
@@ -896,25 +1125,29 @@ class _ShortNetworkErrors(logging.Filter):
 
 
 COMMANDS = {  # меню команд Telegram (кнопка «Меню» слева от поля ввода) — на языке приложения Telegram
-    "ru": [("today", "Сегодня"), ("tomorrow", "Завтра"), ("week", "Неделя"),
+    "ru": [("today", "Сегодня"), ("tomorrow", "Завтра"), ("week", "Неделя"), ("group", "Выбрать группу"),
            ("subscribe", "Присылать расписание в выбранное время"), ("settings", "Настройки и язык")],
-    "en": [("today", "Today"), ("tomorrow", "Tomorrow"), ("week", "This week"),
+    "en": [("today", "Today"), ("tomorrow", "Tomorrow"), ("week", "This week"), ("group", "Choose your group"),
            ("subscribe", "Get the timetable at a time you choose"), ("settings", "Settings and language")],
     "fr": [("today", "Aujourd'hui"), ("tomorrow", "Demain"), ("week", "Cette semaine"),
+           ("group", "Choisir votre groupe"),
            ("subscribe", "Recevoir l'emploi du temps à l'heure choisie"), ("settings", "Paramètres et langue")],
 }
 
 
 # имя и описание бота для тех, у кого Telegram на английском/французском (русские — из BotFather)
 BOT_PROFILE = {
-    "en": ("Gubkin Timetable (Beta)", "Gubkin University timetable for group {g}, with a map showing where your class is.",
-           "Gubkin University timetable for group {g}: today, tomorrow, this week, and a floor map with the room "
-           "of your class. The bot is in beta, so check the official timetable too."),
-    "fr": ("Emploi du temps Gubkin (bêta)", "Emploi du temps de l'Université Gubkin, groupe {g}, avec le plan "
-           "de la salle de cours.",
-           "Emploi du temps de l'Université Gubkin pour le groupe {g}\u00a0: aujourd'hui, demain, cette semaine, "
-           "et un plan de l'étage avec la salle de votre cours. Le bot est en version bêta\u00a0: vérifiez "
-           "aussi l'emploi du temps officiel."),
+    "en": ("Gubkin Timetable (Beta)", "Gubkin University timetable for every group of the geology faculty, "
+           "with a map showing where your class is.",
+           "Gubkin University timetable for every group of the geology faculty: choose your group and get "
+           "today's and tomorrow's classes, this week, and a floor map with the room of your class. "
+           "The bot is in beta, so check the official timetable too."),
+    "fr": ("Emploi du temps Gubkin (bêta)", "Emploi du temps de l'Université Gubkin pour tous les groupes "
+           "de la faculté de géologie, avec le plan de la salle de cours.",
+           "Emploi du temps de l'Université Gubkin pour tous les groupes de la faculté de géologie\u00a0: "
+           "choisissez votre groupe et consultez les cours d'aujourd'hui et de demain, la semaine, et un plan "
+           "de l'étage avec la salle de votre cours. Le bot est en version bêta\u00a0: vérifiez aussi "
+           "l'emploi du temps officiel."),
 }
 
 
@@ -926,8 +1159,8 @@ async def _set_commands(app: Application) -> None:
                                           language_code=None if lang == "ru" else lang)
         for lang, (name, short, desc) in BOT_PROFILE.items():
             await app.bot.set_my_name(name, language_code=lang)
-            await app.bot.set_my_short_description(short.format(g=GROUP_CODE), language_code=lang)
-            await app.bot.set_my_description(desc.format(g=GROUP_CODE), language_code=lang)
+            await app.bot.set_my_short_description(short, language_code=lang)
+            await app.bot.set_my_description(desc, language_code=lang)
     except Exception as e:  # меню и описание — не главное, бот работает и без них
         log.warning("set_my_commands: %s", e)
 
@@ -958,12 +1191,15 @@ def main() -> None:
         builder = builder.proxy(proxy).get_updates_proxy(proxy)
         log.info("Telegram via proxy %s", proxy.split("@")[-1])
     app = builder.post_init(_set_commands).build()
+    _migrate_user_groups()
     # group=-1: срабатывает раньше остальных обработчиков на каждое сообщение
     app.add_handler(TypeHandler(Update, track_user), group=-1)
     app.add_handler(CommandHandler(["start", "help"], cmd_start))
     app.add_handler(CommandHandler(["settings", "language"], cmd_settings))
     app.add_handler(CallbackQueryHandler(on_lang, pattern=r"^lang:"))
     app.add_handler(CallbackQueryHandler(on_sub_button, pattern=r"^sub:"))
+    app.add_handler(CommandHandler("group", cmd_group))
+    app.add_handler(CallbackQueryHandler(on_group, pattern=r"^grp:"))
     app.add_handler(CommandHandler("untranslated", cmd_untranslated))
     app.add_handler(CommandHandler("broadcast", cmd_broadcast))
     app.add_handler(CallbackQueryHandler(on_broadcast, pattern=r"^bc:"))

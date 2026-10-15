@@ -54,19 +54,68 @@ def set_lang(user_id, lang: str) -> None:
 
 TEXT = {
     "help": {
-        "en": "📅 Gubkin University timetable, group {group}\n\n"
+        "ru": "📅 Расписание РГУ им. Губкина, факультет геологии\n{group_line}\n\n"
+              "/today — на сегодня\n"
+              "/tomorrow — на завтра\n"
+              "/week — текущая неделя\n"
+              "/group — выбрать группу\n"
+              "/subscribe — присылать расписание в выбранное время\n"
+              "/settings — язык",
+        "en": "📅 Gubkin University timetable, geology faculty\n{group_line}\n\n"
               "/today — today's classes\n"
               "/tomorrow — tomorrow's classes\n"
               "/week — this week\n"
+              "/group — choose your group\n"
               "/subscribe — get the timetable at a time you choose\n"
               "/settings — language",
-        "fr": "📅 Emploi du temps de l'Université Gubkin, groupe {group}\n\n"
+        "fr": "📅 Emploi du temps de l'Université Gubkin, faculté de géologie\n{group_line}\n\n"
               "/today — les cours d'aujourd'hui\n"
               "/tomorrow — les cours de demain\n"
               "/week — cette semaine\n"
+              "/group — choisir votre groupe\n"
               "/subscribe — recevoir l'emploi du temps à l'heure choisie\n"
               "/settings — langue",
     },
+    # ---- выбор группы
+    "btn_group": {"ru": "👥 Моя группа", "en": "👥 My group", "fr": "👥 Mon groupe"},
+    "btn_group_change": {"ru": "👥 Сменить группу", "en": "👥 Change group", "fr": "👥 Changer de groupe"},
+    "btn_back": {"ru": "⬅️ Назад", "en": "⬅️ Back", "fr": "⬅️ Retour"},
+    "group_current": {"ru": "👥 Группа: {code}", "en": "👥 Group: {code}", "fr": f"👥 Groupe{NBSP}: {{code}}"},
+    "group_none": {"ru": "👥 Группа не выбрана", "en": "👥 No group chosen", "fr": "👥 Aucun groupe choisi"},
+    "group_choose_year": {"ru": "👥 Выберите курс:", "en": "👥 Choose your year:",
+                          "fr": f"👥 Choisissez votre année{NBSP}:"},
+    "group_choose": {"ru": "👥 Выберите группу:", "en": "👥 Choose your group:",
+                     "fr": f"👥 Choisissez votre groupe{NBSP}:"},
+    "group_first": {"ru": "Сначала выберите свою группу 👇", "en": "First, choose your group 👇",
+                    "fr": "Choisissez d'abord votre groupe 👇"},
+    "group_set": {
+        "ru": "✅ Ваша группа: {code}\nТеперь расписание показывается для неё. "
+              "Сменить группу — кнопка «👥 Моя группа» или /group",
+        "en": "✅ Your group: {code}\nThe timetable is now shown for this group. "
+              "To change it, tap “👥 My group” or send /group",
+        "fr": f"✅ Votre groupe{NBSP}: {{code}}\nL'emploi du temps est maintenant celui de ce groupe. "
+              f"Pour en changer, appuyez sur «{NBSP}👥 Mon groupe{NBSP}» ou envoyez /group",
+    },
+    "group_pending": {
+        "ru": "⏳ Расписание группы {code} ещё загружается. Оно появится в течение нескольких часов, "
+              "при следующем обновлении.",
+        "en": "⏳ The timetable for group {code} is still loading. It will appear within a few hours, "
+              "after the next update.",
+        "fr": "⏳ L'emploi du temps du groupe {code} est en cours de chargement. Il apparaîtra d'ici "
+              "quelques heures, lors de la prochaine mise à jour.",
+    },
+    "group_unknown": {
+        "ru": "Не нашёл группу {code} на факультете геологии. Выберите из списка 👇",
+        "en": "I couldn't find group {code} in the geology faculty. Choose from the list 👇",
+        "fr": "Je n'ai pas trouvé le groupe {code} dans la faculté de géologie. Choisissez dans la liste 👇",
+    },
+    "group_list_loading": {
+        "ru": "Список всех групп факультета ещё загружается — загляните через несколько часов.",
+        "en": "The full list of the faculty's groups is still loading. Please check back in a few hours.",
+        "fr": "La liste complète des groupes de la faculté est en cours de chargement. "
+              "Revenez dans quelques heures.",
+    },
+    "groups_other": {"ru": "Другие", "en": "Other", "fr": "Autres"},
     "beta": {
         "ru": "⚠️ Бот и карта аудиторий ещё в разработке. Возможны ошибки в расписании и на карте — "
               "не опирайтесь на них полностью и сверяйтесь с официальным расписанием: lk.gubkin.ru/schedule",
@@ -81,7 +130,7 @@ TEXT = {
     "btn_week": {"ru": "🗓 Неделя", "en": "🗓 This week", "fr": "🗓 Cette semaine"},
     "btn_next": {"ru": "⏭ След. неделя", "en": "⏭ Next week", "fr": "⏭ Semaine prochaine"},
     "btn_map": {"ru": "🗺 Где пара", "en": "🗺 Where's my class", "fr": "🗺 Où est mon cours"},
-    "btn_digest": {"ru": "⏰ Рассылка расписания", "en": "⏰ Daily timetable", "fr": "⏰ Envoi quotidien"},
+    "btn_digest": {"ru": "⏰ Рассылка", "en": "⏰ Daily timetable", "fr": "⏰ Envoi quotidien"},
     "btn_settings": {"ru": "⚙️ Настройки", "en": "⚙️ Settings", "fr": "⚙️ Paramètres"},
     "settings": {"ru": "⚙️ <b>Настройки</b>\nЯзык: {name}\n\nВыберите язык:",
                  "en": "⚙️ <b>Settings</b>\nLanguage: {name}\n\nChoose a language:",
@@ -230,6 +279,15 @@ def t(key: str, lang: str = "ru", **kw) -> str:
     variants = TEXT[key]
     s = variants.get(lang) or variants.get("ru", "")
     return s.format(**kw) if kw else s
+
+
+def course(n: int, lang: str = "ru") -> str:
+    """Номер курса: «1 курс», «Year 1», «1re année» / «2e année»."""
+    if lang == "en":
+        return f"Year {n}"
+    if lang == "fr":
+        return f"{n}{'re' if n == 1 else 'e'} année"
+    return f"{n} курс"
 
 
 def duration(minutes: int, lang: str = "ru") -> str:

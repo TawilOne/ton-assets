@@ -57,6 +57,8 @@ class GubkinClient:
         self.delay = delay  # пауза между запросами, чтобы не злить WAF
         self.cache_ttl = cache_ttl  # сколько секунд помнить скачанную неделю
         self._cache: dict[tuple, tuple[float, dict]] = {}
+        # чем ужать ответ сайта перед сохранением в кэш (оставить только нужное) — задаёт бот
+        self.slim = None
         # кэш сохраняется на диск: если сайт не отвечает, можно показать последнее расписание
         self.cache_file = pathlib.Path(cache_file) if cache_file else None
         self._load_cache()
@@ -201,13 +203,23 @@ class GubkinClient:
         except (OSError, AttributeError):
             return None
 
-    def _offline_week(self, key: tuple) -> dict:
+    def _reload_if_changed(self) -> None:
         try:  # ноутбук прислал новый файл — перечитываем
             if self.cache_file.stat().st_mtime != self._cache_mtime:
                 self._cache.clear()
                 self._load_cache()
-        except OSError:
+        except (OSError, AttributeError):
             pass
+
+    def has_group(self, group_id) -> bool:
+        """Есть ли в кэше хоть одна неделя этой группы (offline: прислал ли её ноутбук)."""
+        if self.offline:
+            self._reload_if_changed()
+        gid = str(group_id)
+        return any(g == gid for _, g in list(self._cache))
+
+    def _offline_week(self, key: tuple) -> dict:
+        self._reload_if_changed()
         hit = self._cache.get(key)
         if not hit:
             raise GubkinError("расписания на эту неделю ещё нет на сервере — его присылает ноутбук "
@@ -239,13 +251,15 @@ class GubkinClient:
                 self.stale = True
                 return hit[1]
             raise
+        if self.slim:
+            data = self.slim(data)
         self._cache[key] = (time.time(), data)
         self._save_cache()
         return data
 
-    def find_group(self, code: str, faculty_hint: str = "геолог") -> tuple[dict, dict]:
-        """Ищет группу по коду. Сначала на факультетах, чьё имя содержит faculty_hint,
-        затем на всех остальных. Возвращает (факультет, группа)."""
+    def find_faculty(self, code: str, faculty_hint: str = "геолог") -> tuple[dict, list[dict], dict]:
+        """Ищет факультет, в котором есть группа code. Сначала смотрит факультеты, чьё имя содержит
+        faculty_hint, затем остальные. Возвращает (факультет, все его группы, сама группа)."""
         if self.offline:
             raise GubkinError("группа ещё не известна серверу — запустите sync на ноутбуке")
         wanted = normalize_code(code)
@@ -253,7 +267,13 @@ class GubkinClient:
         hint = faculty_hint.lower()
         facs.sort(key=lambda f: hint not in str(f.get("name") or f.get("title") or "").lower())
         for f in facs:
-            for g in self.groups(f["id"]):
+            rows = self.groups(f["id"])
+            for g in rows:
                 if normalize_code(str(g.get("code") or g.get("name") or "")) == wanted:
-                    return f, g
+                    return f, rows, g
         raise GubkinError(f"Группа {code} не найдена в списке групп сайта")
+
+    def find_group(self, code: str, faculty_hint: str = "геолог") -> tuple[dict, dict]:
+        """Ищет группу по коду. Возвращает (факультет, группа)."""
+        f, _, g = self.find_faculty(code, faculty_hint)
+        return f, g

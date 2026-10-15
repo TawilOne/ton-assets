@@ -83,7 +83,7 @@ const tg = window.Telegram && window.Telegram.WebApp;
 if (tg) { tg.ready(); tg.expand(); try { tg.setHeaderColor("#000000"); tg.setBackgroundColor("#000000"); } catch (e) {} }
 
 const ACTIONS = { today: "📅 Сегодня", tomorrow: "➡️ Завтра", week: "🗓 Неделя", next: "⏭ След. неделя",
-                  map: "🗺 Где пара", digest: "⏰ Рассылка", settings: "⚙️ Настройки", start: "/start",
+                  map: "🗺 Где пара", digest: "⏰ Рассылка", group: "👥 Группа", settings: "⚙️ Настройки", start: "/start",
                   date: "/date", export: "/all", captcha: "/captcha", other: "Другое" };
 const FLAGS = { ru: "🇷🇺", en: "🇬🇧", fr: "🇫🇷" };
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -211,7 +211,7 @@ function render() {
   const actRows = Object.entries(acts).sort((a, b) => b[1] - a[1]);
   const maxAct = Math.max(1, ...actRows.map(r => r[1]));
 
-  let list = users.filter(u => !query || (u.name + " " + u.username).toLowerCase().includes(query));
+  let list = users.filter(u => !query || (u.name + " " + u.username + " " + u.group).toLowerCase().includes(query));
   list.sort(sortBy === "clicks" ? (a, b) => b.count - a.count : sortBy === "clicks-asc" ? (a, b) => a.count - b.count
           : sortBy === "new" ? (a, b) => b.first.localeCompare(a.first) : (a, b) => b.last.localeCompare(a.last));
 
@@ -242,7 +242,7 @@ function render() {
 
     <div class="card">
       <h2>Пользователи <span>${list.length}</span></h2>
-      <input class="search" id="q" placeholder="Поиск по имени или @нику" value="${esc(query)}">
+      <input class="search" id="q" placeholder="Поиск по имени, @нику или группе" value="${esc(query)}">
       <div class="sort">
         <button data-s="last" class="${sortBy === "last" ? "on" : ""}">Недавние</button>
         <button data-s="clicks" class="${sortBy.startsWith("clicks") ? "on" : ""}">Клики ${sortBy === "clicks-asc" ? "↑" : "↓"}</button>
@@ -250,7 +250,7 @@ function render() {
       </div>
       ${list.slice(0, shown).map(u => {
         const initial = (u.name || u.username || "?").trim()[0].toUpperCase();
-        const meta = [u.username ? "@" + u.username : "", ago(u.last, nowStr),
+        const meta = [u.group ? "👥 " + u.group : "", u.username ? "@" + u.username : "", ago(u.last, nowStr),
                       u.sub ? "⏰ " + u.sub : "", FLAGS[u.lang] && u.lang !== "ru" ? FLAGS[u.lang] : ""].filter(Boolean).join(" · ");
         return `<div class="user"><div class="ava ${u.last.startsWith(today) ? "live" : ""}">${esc(initial)}</div>
           <div class="who"><b>${esc(u.name || "без имени")}</b><small>${esc(meta)}</small></div>
@@ -290,7 +290,7 @@ load().then(data => {
   nowStr = data.now;
   document.getElementById("updated").textContent = `Обновлено ${data.now.slice(8, 10)}.${data.now.slice(5, 7)} в ${data.now.slice(11)}`;
   users = data.u.map(r => ({ name: r[0], username: r[1], count: r[2], first: r[3] || "", last: r[4] || "", lang: r[5],
-                             sub: r[6], acts: r[7] || {}, days: r[8] || {} }));
+                             sub: r[6], acts: r[7] || {}, days: r[8] || {}, group: r[9] || "" }));
   render();
 }).catch(e => {
   document.getElementById("app").innerHTML = `<div class="empty">Не удалось прочитать данные. Откройте /users ещё раз.<br>

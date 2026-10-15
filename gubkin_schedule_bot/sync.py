@@ -1,4 +1,11 @@
-"""Ноутбук → сервер: скачивает расписание группы на семестр и отправляет его боту на сервер.
+"""Ноутбук → сервер: скачивает расписание групп факультета и отправляет его боту на сервер.
+
+Что скачивается (чем меньше запросов, тем реже сайт просит капчу):
+  1) группы, которые выбрали пользователи бота, — текущая и 2 следующие недели, каждый раз;
+  2) все остальные группы факультета — текущая и следующая неделя, раз в сутки
+     (чтобы новичок сразу увидел расписание своей группы);
+  3) выбранные группы — остальные недели семестра: будущие раз в сутки, прошедшие — если их нет.
+За один запуск — не дольше 11 минут (вручную — 25): что не успели, докачается в следующий раз.
 
 Сайт Губкина не пускает серверы хостингов, а домашний интернет пускает. Поэтому расписание
 скачивает ноутбук, а бот на сервере (GUBKIN_OFFLINE=1) отвечает по присланному файлу.
@@ -25,8 +32,8 @@ os.chdir(HERE)
 sys.path.insert(0, str(HERE))
 
 import bot  # noqa: E402  — та же группа, cache.json и cookies.json, что у бота на ноутбуке
-from gubkin_api import CaptchaRequired, GubkinError  # noqa: E402
-from schedule import semester_bounds  # noqa: E402
+from gubkin_api import CaptchaRequired, GubkinError, normalize_code  # noqa: E402
+from schedule import semester_bounds, slim_week  # noqa: E402
 
 DEFAULT_SERVER = "root@153.76.167.68"
 REMOTE = "/opt/gubkin-bot/gubkin_schedule_bot"
@@ -62,7 +69,7 @@ def server() -> str:
 
 
 def ssh(args: list[str], data: bytes | None = None, batch: bool = True, timeout: int = 90):
-    opts = ["-i", str(KEY), "-o", "IdentitiesOnly=yes",
+    opts = ["-i", str(KEY), "-o", "IdentitiesOnly=yes", "-o", "Compression=yes",
             "-o", "ConnectTimeout=20", "-o", "StrictHostKeyChecking=accept-new"]
     if batch:
         opts += ["-o", "BatchMode=yes"]  # без вопросов: только по ключу
@@ -110,59 +117,169 @@ def solve_captcha() -> None:
     raise CaptchaRequired("капча не пройдена")
 
 
-def due(mon: dt.date, this_monday: dt.date, gid) -> bool:
-    """Нужно ли сейчас скачивать неделю. Чем меньше запросов, тем реже капча:
-    текущая и 2 следующие недели — каждый раз (там бывают переносы), дальние — раз в сутки,
-    прошедшие — только если их ещё нет."""
+DAY = 20 * 3600  # «раз в сутки»: запуски идут каждые 3 часа, 20 часов — с запасом
+
+
+def _with_captcha(interactive: bool, func, *args):
+    """Вызывает func; если сайт просит капчу — вручную показываем её, по расписанию — сдаёмся."""
+    while True:
+        try:
+            return func(*args)
+        except CaptchaRequired:
+            if not interactive:
+                raise
+            solve_captcha()
+
+
+def refresh_groups(interactive: bool) -> list[dict]:
+    """Список всех групп факультета (groups.json): с сайта раз в сутки — это 1–3 запроса."""
+    try:
+        data = json.loads(bot.GROUPS_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = {}
+    if not (data.get("groups") and time.time() - data.get("time", 0) < DAY):
+        try:
+            fac, rows = data.get("faculty") or {}, None
+            fid = fac.get("id") or bot._group.get("faculty_id")
+            if fid:  # факультет уже известен — один запрос
+                fac = {"id": fid, "name": fac.get("name") or bot._group.get("faculty") or ""}
+                rows = _with_captcha(interactive, bot.client.groups, fid)
+                if not any(normalize_code(str(g.get("code") or g.get("name") or "")) == bot.GROUP_CODE for g in rows):
+                    rows = None  # группы по умолчанию там нет — ищем факультет заново
+            if rows is None:
+                f, rows, _ = _with_captcha(interactive, bot.client.find_faculty, bot.GROUP_CODE, bot.FACULTY_HINT)
+                fac = {"id": f.get("id"), "name": f.get("name") or f.get("title") or ""}
+            groups = [{"id": str(g["id"]), "code": normalize_code(str(g.get("code") or g.get("name") or ""))}
+                      for g in rows if g.get("id") and (g.get("code") or g.get("name"))]
+            if groups:
+                data = {"faculty": fac, "groups": groups, "time": time.time()}
+                bot.GROUPS_FILE.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+                say(f"групп на факультете: {len(groups)}")
+        except CaptchaRequired:
+            raise
+        except (GubkinError, OSError, ValueError, KeyError, TypeError) as e:
+            say(f"не удалось обновить список групп: {e}")  # работаем со старым списком
+    return bot._faculty_groups()
+
+
+def wanted_codes(srv: str) -> set[str]:
+    """Группы, которые выбрали пользователи бота (файл user_groups.json на сервере)."""
+    codes = {bot.GROUP_CODE}
+    sources = []
+    try:
+        r = ssh([srv, f"cat {REMOTE}/user_groups.json 2>/dev/null || echo '{{}}'"])
+        if r.returncode == 0:
+            sources.append(r.stdout.decode("utf-8", errors="replace"))
+        else:
+            say("не удалось узнать с сервера, какие группы выбраны, — обновляю как обычные")
+    except (OSError, subprocess.SubprocessError) as e:
+        say(f"не удалось узнать с сервера, какие группы выбраны: {e}")
+    if bot.USER_GROUPS_FILE.exists():  # если бот запускали и на ноутбуке
+        sources.append(bot.USER_GROUPS_FILE.read_text(encoding="utf-8"))
+    for text in sources:
+        try:
+            codes |= {normalize_code(str(c)) for c in json.loads(text or "{}").values() if c}
+        except (ValueError, AttributeError):
+            pass
+    return codes
+
+
+def _age(mon: dt.date, gid) -> float | None:
     hit = bot.client._cache.get((mon, str(gid)))
-    if hit is None:
-        return True
-    age = time.time() - hit[0]
-    if mon < this_monday:
-        return False
-    if mon <= this_monday + dt.timedelta(weeks=2):
-        return True
-    return age > 20 * 3600
+    return None if hit is None else time.time() - hit[0]
 
 
-def download(interactive: bool) -> int:
-    """Скачивает все недели семестра. Отдельные недели сайт может не отдавать (например, летние —
-    отвечает ошибкой 500): их пропускаем. Ошибка — только если не скачалась текущая неделя."""
-    bot._ensure_group()
-    gid = bot._group["id"]
+def plan(groups: list[dict], wanted: set[str], weeks: list[dt.date], this_monday: dt.date,
+         others_limit: int | None = None) -> list[tuple]:
+    """Что скачать в этот раз, по порядку важности: [(понедельник, группа, выбрана ли)].
+    others_limit — сколько недель невыбранных групп брать за раз (по расписанию — порциями,
+    чтобы не делать сотню запросов подряд и не нарваться на капчу)."""
+    chosen = [g for g in groups if g["code"] in wanted]
+    others = [g for g in groups if g["code"] not in wanted]
+    near = [this_monday + dt.timedelta(weeks=k) for k in range(3)]
+    tasks = []
+    # 1) выбранные группы: текущая и 2 следующие недели — каждый раз (там бывают переносы)
+    for g in chosen:
+        tasks += [(m, g, True) for m in near if m in weeks]
+    # 2) остальные группы: текущая, затем следующая неделя — если их нет или они старше суток;
+    #    сначала те, которых нет совсем, потом самые старые
+    stale = []
+    for k, m in enumerate(near[:2]):
+        for g in others:
+            age = _age(m, g["id"])
+            if m in weeks and (age is None or age > DAY):
+                stale.append((age is not None, k, -(age or 0), m, g))
+    stale.sort(key=lambda x: x[:3])
+    tasks += [(m, g, False) for *_, m, g in stale[:others_limit]]
+    # 3) выбранные группы: остальные недели семестра — будущие раз в сутки, прошедшие — только если их нет
+    for g in chosen:
+        for m in weeks:
+            if m in near:
+                continue
+            age = _age(m, g["id"])
+            if age is None or (m > this_monday and age > DAY):
+                tasks.append((m, g, True))
+    return tasks
+
+
+def compact(weeks: list[dt.date]) -> None:
+    """Ужимает кэш (только нужные поля) и выбрасывает прошлые семестры — файл уходит на сервер."""
+    first = weeks[0] - dt.timedelta(weeks=1)
+    cache = bot.client._cache
+    for key, (ts, data) in list(cache.items()):
+        if key[0] < first:
+            del cache[key]
+        else:
+            cache[key] = (ts, slim_week(data))
+    bot.client._save_cache()
+
+
+def download(interactive: bool, srv: str) -> int:
+    """Скачивает расписание по плану (см. plan). Отдельные недели сайт может не отдавать (летние —
+    ошибкой 500): их пропускаем. Ошибка — только если у выбранной группы не скачалась текущая неделя."""
+    _with_captcha(interactive, bot._ensure_group)
     bot.client.cache_ttl = 60  # то, что решили обновить, — берём с сайта, а не из кэша
     bot.client.delay = 1.5     # частые запросы подряд сайт принимает за робота и просит капчу
-    weeks = mondays(dt.date.today())
-    this_monday = dt.date.today() - dt.timedelta(days=dt.date.today().weekday())
-    failed: dict[dt.date, str] = {}
+    today = dt.date.today()
+    weeks = mondays(today)
+    this_monday = today - dt.timedelta(days=today.weekday())
+    groups = refresh_groups(interactive)
+    wanted = wanted_codes(srv)
+    tasks = plan(groups, wanted, weeks, this_monday, others_limit=None if interactive else 60)
+    say(f"групп: {len(groups)}, выбраны пользователями: {len(wanted & {g['code'] for g in groups})}, "
+        f"запросов в плане: {len(tasks)}")
+    deadline = time.monotonic() + (25 if interactive else 11) * 60  # задача Windows живёт не дольше 15 минут
+    failed: dict[tuple, str] = {}
     fetched = 0
-    for i, mon in enumerate(weeks, 1):
-        # и вручную, и по расписанию качаем только то, что пора обновить: чем меньше запросов, тем реже капча
-        if mon != this_monday and not due(mon, this_monday, gid):
-            continue
+    for i, (mon, g, chosen) in enumerate(tasks, 1):
+        if time.monotonic() > deadline:
+            say(f"время вышло, осталось запросов: {len(tasks) - i + 1} — докачаю в следующий раз")
+            break
         fetched += 1
         bot.client.stale = False
-        while True:
-            try:
-                bot.client.week(mon, gid)
-                if bot.client.stale:  # сайт не ответил, вернулась старая копия
-                    failed[mon] = "сайт не ответил"
-                break
-            except CaptchaRequired:
-                if not interactive:
-                    raise
-                solve_captcha()
-            except (GubkinError, OSError, ValueError) as e:
-                failed[mon] = str(e)
-                break
+        try:
+            _with_captcha(interactive, bot.client.week, mon, g["id"])
+            if bot.client.stale:  # сайт не ответил, вернулась старая копия
+                failed[(mon, g["code"], chosen)] = "сайт не ответил"
+        except CaptchaRequired:
+            compact(weeks)
+            raise
+        except (GubkinError, OSError, ValueError) as e:
+            failed[(mon, g["code"], chosen)] = str(e)
         if interactive:
-            print(f"\r  неделя {i}/{len(weeks)}", end="", flush=True)
-    if interactive:
+            print(f"\r  {i}/{len(tasks)}  {g['code']:<14}", end="", flush=True)
+    if interactive and tasks:
         print()
+    compact(weeks)
     if failed:
-        say("не скачались недели: " + ", ".join(f"{m:%d.%m} ({e})" for m, e in failed.items()))
-    if this_monday in failed:
-        raise GubkinError(f"не скачалась текущая неделя: {failed[this_monday]}")
+        by_error: dict[str, list[str]] = {}
+        for (mon, code, _), e in failed.items():
+            by_error.setdefault(e, []).append(f"{code} {mon:%d.%m}")
+        say("не скачались: " + "; ".join(
+            f"{e}: {', '.join(v[:8])}{f' и ещё {len(v) - 8}' if len(v) > 8 else ''}" for e, v in by_error.items()))
+    bad = sorted({code for (mon, code, chosen) in failed if chosen and mon == this_monday})
+    if bad:
+        raise GubkinError(f"не скачалась текущая неделя: {', '.join(bad)}")
     return fetched - len(failed)
 
 
@@ -175,7 +292,7 @@ def run(interactive: bool) -> int:
     now = dt.datetime.now().isoformat(timespec="seconds")
     status = {"time": now, "ok": False, "error": "", "last_ok": prev.get("last_ok")}
     try:
-        n = download(interactive)
+        n = download(interactive, srv)
         status.update(ok=True, last_ok=now)
         say(f"обновлено недель: {n}")
     except CaptchaRequired:
@@ -191,6 +308,8 @@ def run(interactive: bool) -> int:
             put(srv, "cache.json", bot.client.cache_file.read_bytes())
         if bot.GROUP_FILE.exists():
             put(srv, "group.json", bot.GROUP_FILE.read_bytes())
+        if bot.GROUPS_FILE.exists():
+            put(srv, "groups.json", bot.GROUPS_FILE.read_bytes())
         put(srv, "sync_status.json", STATUS.read_bytes())
         say(f"отправлено на сервер {srv}")
     except Exception as e:
