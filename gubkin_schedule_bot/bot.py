@@ -35,6 +35,7 @@ from zoneinfo import ZoneInfo
 
 from telegram import (InlineKeyboardButton, InlineKeyboardMarkup, InputFile, KeyboardButton,
                       ReplyKeyboardMarkup, Update, WebAppInfo)
+from telegram.error import Forbidden
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler,
                           TypeHandler, filters)
 
@@ -739,7 +740,9 @@ async def digest_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         try:
             for part in _split(texts[key]):
                 await ctx.bot.send_message(int(chat_id), part, parse_mode="HTML")
-        except Exception:  # пользователь заблокировал бота и т. п.
+        except Forbidden:  # пользователь заблокировал бота
+            _mark_blocked(chat_id, True)
+        except Exception:
             log.warning("cannot send to %s", chat_id)
 
 
@@ -937,6 +940,10 @@ async def track_user(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if user is None or user.is_bot:
         return
     now = dt.datetime.now(MSK).strftime("%Y-%m-%d %H:%M")
+    member = update.my_chat_member
+    if member and member.chat.type == "private":  # пользователь заблокировал бота или снова запустил
+        _mark_blocked(user.id, member.new_chat_member.status in ("kicked", "left"), now)
+        return
     text = update.effective_message.text if update.effective_message else ""
     action = _action(update)
     with _users_lock:
@@ -946,6 +953,7 @@ async def track_user(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         u = users.setdefault(key, {"first": now, "count": 0})
         u.update(name=user.full_name, username=user.username or "", last=now,
                  count=u.get("count", 0) + 1, last_text=(text or "")[:40])
+        u.pop("blocked", None)  # пишет боту — значит, не заблокировал
         if action and action != "text":  # по кнопкам и по дням — для графиков в /users
             acts = u.setdefault("acts", {})
             acts[action] = acts.get(action, 0) + 1
@@ -964,6 +972,23 @@ async def track_user(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                                        parse_mode="HTML")
         except Exception:
             log.warning("cannot notify admin")
+
+
+def _mark_blocked(user_id, blocked: bool, when: str | None = None) -> None:
+    """Отмечает в users.json, что пользователь заблокировал бота (или разблокировал)."""
+    with _users_lock:
+        users = _load_users()
+        u = users.get(str(user_id))
+        if u is None or bool(u.get("blocked")) == blocked:
+            return
+        if blocked:
+            u["blocked"] = when or dt.datetime.now(MSK).strftime("%Y-%m-%d %H:%M")
+        else:
+            u.pop("blocked", None)
+        try:
+            USERS_FILE.write_text(json.dumps(users, ensure_ascii=False, indent=1), encoding="utf-8")
+        except OSError:
+            log.warning("cannot save users.json")
 
 
 # ---- рассылка объявления всем пользователям (только администратор)
@@ -1023,7 +1048,10 @@ async def on_broadcast(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         try:  # вместе с сообщением — новая нижняя панель на языке пользователя
             await ctx.bot.send_message(int(uid), texts.get(lang) or texts["ru"], reply_markup=keyboard(lang))
             ok += 1
-        except Exception:  # заблокировал бота, удалил аккаунт и т. п.
+        except Forbidden:  # заблокировал бота или удалил аккаунт
+            _mark_blocked(uid, True)
+            fail += 1
+        except Exception:
             fail += 1
         await asyncio.sleep(0.05)  # Telegram ограничивает ~30 сообщений в секунду
     await q.edit_message_text(f"✅ Разослано: {ok}" + (f"\nНе доставлено: {fail} (заблокировали бота)" if fail else ""))
@@ -1050,10 +1078,12 @@ async def cmd_users(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     today = dt.datetime.now(MSK).strftime("%Y-%m-%d")
     active = sum(1 for u in users.values() if u.get("last", "").startswith(today))
+    blocked = sum(1 for u in users.values() if u.get("blocked"))
     url = (os.environ.get("WEBAPP_URL") or _read_setting("webapp.txt") or DEFAULT_WEBAPP_URL) + \
         f"admin.html?v={int(time.time() // 300)}&p=" + _admin_payload(users)
     await update.effective_message.reply_text(
-        f"👥 Пользователей: <b>{len(users)}</b> · сегодня активны: <b>{active}</b>",
+        f"👥 Пользователей: <b>{len(users)}</b> · сегодня активны: <b>{active}</b>\n"
+        f"🚫 Заблокировали бота: <b>{blocked}</b>",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📊 Открыть статистику",
                                                                  web_app=WebAppInfo(url))]]))
@@ -1069,7 +1099,7 @@ def _admin_payload(users: dict) -> str:
     for uid, u in sorted(users.items(), key=lambda kv: kv[1].get("last", ""), reverse=True)[:300]:
         rows.append([u.get("name") or "", u.get("username") or "", u.get("count", 0), u.get("first", ""),
                      u.get("last", ""), i18n.get_lang(uid), (subs.get(uid) or {}).get("time", ""),
-                     u.get("acts") or {}, u.get("days") or {}, groups.get(uid, "")])
+                     u.get("acts") or {}, u.get("days") or {}, groups.get(uid, ""), u.get("blocked") or ""])
     data = json.dumps({"now": dt.datetime.now(MSK).strftime("%Y-%m-%d %H:%M"), "u": rows},
                       ensure_ascii=False, separators=(",", ":")).encode()
     z = zlib.compressobj(9, zlib.DEFLATED, -15)  # «сырой» deflate — его умеет распаковать браузер
@@ -1233,7 +1263,8 @@ def main() -> None:
     # иначе при запуске он долго отвечает на каждое из них
     # если Telegram пока недоступен (VPN ещё не включён), не падаем, а пробуем снова
     log.info("Подключаюсь к Telegram... Если долго висит — проверьте VPN/прокси.")
-    app.run_polling(drop_pending_updates=True, bootstrap_retries=-1)
+    # ALL_TYPES — чтобы приходили и события «пользователь заблокировал бота» (для /users)
+    app.run_polling(drop_pending_updates=True, bootstrap_retries=-1, allowed_updates=Update.ALL_TYPES)
 
 
 if __name__ == "__main__":

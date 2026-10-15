@@ -206,6 +206,7 @@ function render() {
   const activeToday = users.filter(u => u.last.startsWith(today)).length;
   const active7 = users.filter(u => u.last >= days[7]).length;
   const newWeek = users.filter(u => u.first >= days[7]).length;
+  const blocked = users.filter(u => u.blocked).length;
   const maxDay = Math.max(1, ...days.map(k => perDay[k].clicks));
 
   const actRows = Object.entries(acts).sort((a, b) => b[1] - a[1]);
@@ -217,7 +218,7 @@ function render() {
 
   document.getElementById("app").innerHTML = `
     <div class="kpis">
-      <div class="kpi"><b>${users.length}</b><small>всего пользователей</small></div>
+      <div class="kpi"><b>${users.length}</b><small>всего пользователей · заблокировали ${blocked}</small></div>
       <div class="kpi"><b>${activeToday}</b><small>активны сегодня</small></div>
       <div class="kpi"><b>${perDay[today] ? perDay[today].clicks : 0}</b><small>кликов сегодня</small></div>
       <div class="kpi"><b>${active7}</b><small>активны за 7 дней · новых ${newWeek}</small></div>
@@ -250,7 +251,7 @@ function render() {
       </div>
       ${list.slice(0, shown).map(u => {
         const initial = (u.name || u.username || "?").trim()[0].toUpperCase();
-        const meta = [u.group ? "👥 " + u.group : "", u.username ? "@" + u.username : "", ago(u.last, nowStr),
+        const meta = [u.blocked ? "🚫 заблокировал(а) " + ago(u.blocked, nowStr) : "", u.group ? "👥 " + u.group : "", u.username ? "@" + u.username : "", ago(u.last, nowStr),
                       u.sub ? "⏰ " + u.sub : "", FLAGS[u.lang] && u.lang !== "ru" ? FLAGS[u.lang] : ""].filter(Boolean).join(" · ");
         return `<div class="user"><div class="ava ${u.last.startsWith(today) ? "live" : ""}">${esc(initial)}</div>
           <div class="who"><b>${esc(u.name || "без имени")}</b><small>${esc(meta)}</small></div>
@@ -290,7 +291,7 @@ load().then(data => {
   nowStr = data.now;
   document.getElementById("updated").textContent = `Обновлено ${data.now.slice(8, 10)}.${data.now.slice(5, 7)} в ${data.now.slice(11)}`;
   users = data.u.map(r => ({ name: r[0], username: r[1], count: r[2], first: r[3] || "", last: r[4] || "", lang: r[5],
-                             sub: r[6], acts: r[7] || {}, days: r[8] || {}, group: r[9] || "" }));
+                             sub: r[6], acts: r[7] || {}, days: r[8] || {}, group: r[9] || "", blocked: r[10] || "" }));
   render();
 }).catch(e => {
   document.getElementById("app").innerHTML = `<div class="empty">Не удалось прочитать данные. Откройте /users ещё раз.<br>

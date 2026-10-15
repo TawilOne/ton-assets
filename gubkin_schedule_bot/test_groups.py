@@ -2,10 +2,12 @@
 python -m pytest test_groups.py"""
 
 import asyncio
+import base64
 import copy
 import datetime as dt
 import json
 import time
+import zlib
 
 import pytest
 
@@ -358,3 +360,40 @@ def test_sync_end_to_end(tmp_path, monkeypatch):
     assert sync.run(interactive=False) == 1
     assert json.loads(pushed["sync_status.json"])["error"] == "captcha"
     assert len(json.loads(pushed["cache.json"])) == 3
+
+
+def test_blocked_users_counted(env, monkeypatch):
+    from telegram.error import Forbidden
+    bot.USERS_FILE.write_text(json.dumps({"1": {"name": "a", "count": 3}, "2": {"name": "b", "count": 1}}),
+                              encoding="utf-8")
+
+    def member_update(uid, status):
+        u = update(uid=uid)
+        u.my_chat_member = Obj(chat=Obj(type="private"), new_chat_member=Obj(status=status))
+        return u
+    run(bot.track_user(member_update(1, "kicked"), ctx()))  # заблокировал
+    users = bot._load_users()
+    assert users["1"]["blocked"] and users["1"]["count"] == 3 and not users["2"].get("blocked")
+
+    async def send_message(chat, text, **kw):
+        if chat == 2:
+            raise Forbidden("bot was blocked by the user")
+    q = update(uid=99, data="bc:send")
+    q.my_chat_member = None
+    monkey_ctx = ctx()
+    monkey_ctx.bot = Obj(send_message=send_message)
+    monkey_ctx.bot_data["broadcast"] = {"ru": "Привет"}
+    monkeypatch.setattr(bot, "_admin_id", lambda: 99)
+    run(bot.on_broadcast(q, monkey_ctx))
+    assert bot._load_users()["2"]["blocked"]  # рассылка не дошла — тоже отмечаем
+    payload = bot._admin_payload(bot._load_users())
+    rows = json.loads(zlib.decompress(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)), -15))["u"]
+    assert sum(1 for r in rows if r[10]) == 2
+
+    run(bot.track_user(member_update(1, "member"), ctx()))  # снова запустил бота
+    assert not bot._load_users()["1"].get("blocked")
+    u = update(uid=2, text="/today")
+    u.my_chat_member = None
+    u.callback_query = None
+    run(bot.track_user(u, ctx()))  # написал боту — значит, разблокировал
+    assert not bot._load_users()["2"].get("blocked")
