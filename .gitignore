@@ -18,3 +18,4 @@ gubkin_schedule_bot/lang.json
 gubkin_schedule_bot/sync_alert.txt
 gubkin_schedule_bot/groups.json
 gubkin_schedule_bot/user_groups.json
+gubkin_schedule_bot/sync_failed.json

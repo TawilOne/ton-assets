@@ -41,6 +41,7 @@ BRANCH = "claude/rgu-gubkina-schedule-bot-snqhke"
 TASK = "GubkinSync"
 LOG = HERE / "sync.log"
 STATUS = HERE / "sync_status.json"
+FAILED = HERE / "sync_failed.json"  # недели, на которые сайт ответил ошибкой: {"понедельник|id группы": когда}
 NO_WINDOW = 0x08000000 if os.name == "nt" else 0  # ssh из pythonw не должен мигать чёрным окном
 # свой ключ без пароля только для sync — чтобы не зависеть от других ключей на ноутбуке
 KEY = pathlib.Path.home() / ".ssh" / "gubkin_sync_ed25519"
@@ -211,11 +212,29 @@ def _age(mon: dt.date, gid) -> float | None:
     return None if hit is None else time.time() - hit[0]
 
 
+def _load_failed() -> dict[str, float]:
+    try:
+        data = json.loads(FAILED.read_text(encoding="utf-8"))
+        return {k: v for k, v in data.items() if time.time() - v < 8 * 86400} if isinstance(data, dict) else {}
+    except (OSError, ValueError, AttributeError):
+        return {}
+
+
+def _save_failed(data: dict) -> None:
+    try:
+        FAILED.write_text(json.dumps(data), encoding="utf-8")
+    except OSError:
+        pass
+
+
 def plan(groups: list[dict], wanted: set[str], weeks: list[dt.date], this_monday: dt.date,
-         others_limit: int | None = None) -> list[tuple]:
+         others_limit: int | None = None, failed: dict | None = None) -> list[tuple]:
     """Что скачать в этот раз, по порядку важности: [(понедельник, группа, выбрана ли)].
     others_limit — сколько недель невыбранных групп брать за раз (по расписанию — порциями,
-    чтобы не делать сотню запросов подряд и не нарваться на капчу)."""
+    чтобы не делать сотню запросов подряд и не нарваться на капчу).
+    failed — недели, на которые сайт недавно ответил ошибкой (например, летние — 500):
+    прошедшие не спрашиваем неделю, будущие — сутки, чтобы не тратить на них запросы каждый раз."""
+    failed = failed or {}
     chosen = [g for g in groups if g["code"] in wanted]
     others = [g for g in groups if g["code"] not in wanted]
     near = [this_monday + dt.timedelta(weeks=k) for k in range(3)]
@@ -239,6 +258,9 @@ def plan(groups: list[dict], wanted: set[str], weeks: list[dt.date], this_monday
             if m in near:
                 continue
             age = _age(m, g["id"])
+            err = failed.get(f"{m.isoformat()}|{g['id']}")
+            if err and time.time() - err < (7 * 86400 if m < this_monday else DAY):
+                continue
             if age is None or (m > this_monday and age > DAY):
                 tasks.append((m, g, True))
     return tasks
@@ -267,32 +289,52 @@ def download(interactive: bool, srv: str) -> int:
     this_monday = today - dt.timedelta(days=today.weekday())
     groups = refresh_groups(interactive)
     wanted = wanted_codes(srv)
-    tasks = plan(groups, wanted, weeks, this_monday, others_limit=None if interactive else 60)
+    bad_weeks = _load_failed()
+    tasks = plan(groups, wanted, weeks, this_monday, others_limit=None if interactive else 60, failed=bad_weeks)
     say(f"групп: {len(groups)}, выбраны пользователями: {len(wanted & {g['code'] for g in groups})}, "
         f"запросов в плане: {len(tasks)}")
     deadline = time.monotonic() + (25 if interactive else 11) * 60  # задача Windows живёт не дольше 15 минут
     failed: dict[tuple, str] = {}
     fetched = 0
+    def fetch(mon, g, chosen) -> None:
+        key = (mon, g["code"], chosen)
+        failed.pop(key, None)
+        bot.client.stale = False
+        try:
+            _with_captcha(interactive, bot.client.week, mon, g["id"])
+            if bot.client.stale:  # сайт не ответил, вернулась старая копия
+                failed[key] = "сайт не ответил"
+            else:
+                bad_weeks.pop(f"{mon.isoformat()}|{g['id']}", None)
+        except CaptchaRequired:
+            compact(weeks)
+            _save_failed(bad_weeks)
+            raise
+        except (GubkinError, OSError, ValueError) as e:
+            failed[key] = str(e)
+            if isinstance(e, GubkinError):  # сайт ответил ошибкой — запомним, чтобы не спрашивать каждый раз
+                bad_weeks[f"{mon.isoformat()}|{g['id']}"] = time.time()
+
     for i, (mon, g, chosen) in enumerate(tasks, 1):
         if time.monotonic() > deadline:
             say(f"время вышло, осталось запросов: {len(tasks) - i + 1} — докачаю в следующий раз")
             break
         fetched += 1
-        bot.client.stale = False
-        try:
-            _with_captcha(interactive, bot.client.week, mon, g["id"])
-            if bot.client.stale:  # сайт не ответил, вернулась старая копия
-                failed[(mon, g["code"], chosen)] = "сайт не ответил"
-        except CaptchaRequired:
-            compact(weeks)
-            raise
-        except (GubkinError, OSError, ValueError) as e:
-            failed[(mon, g["code"], chosen)] = str(e)
+        fetch(mon, g, chosen)
         if interactive:
             print(f"\r  {i}/{len(tasks)}  {g['code']:<14}", end="", flush=True)
     if interactive and tasks:
         print()
+    # сайт иногда не отвечает на первые запросы (перед капчей) — выбранным группам даём второй шанс
+    again = [k for k, e in failed.items() if e == "сайт не ответил" and k[2]]
+    if again and time.monotonic() < deadline + 60:
+        time.sleep(5)
+        by_code = {g["code"]: g for g in groups}
+        for mon, code, chosen in again:
+            if code in by_code:
+                fetch(mon, by_code[code], chosen)
     compact(weeks)
+    _save_failed(bad_weeks)
     if failed:
         by_error: dict[str, list[str]] = {}
         for (mon, code, _), e in failed.items():

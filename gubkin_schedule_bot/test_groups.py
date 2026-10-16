@@ -356,6 +356,7 @@ def test_sync_end_to_end(tmp_path, monkeypatch):
         monkeypatch.setattr(bot, name, tmp_path / getattr(bot, name).name)
     monkeypatch.setattr(sync, "STATUS", tmp_path / "sync_status.json")
     monkeypatch.setattr(sync, "LOG", tmp_path / "sync.log")
+    monkeypatch.setattr(sync, "FAILED", tmp_path / "sync_failed.json")
     monkeypatch.setattr(sync, "server", lambda: "root@test")
     monkeypatch.setattr(sync.time, "sleep", lambda s: None)
     pushed = {}
@@ -476,3 +477,57 @@ def test_sync_faculty_missing_on_site(tmp_path, monkeypatch):
     assert {g["fac"] for g in groups} == {"geo"}
     log = (tmp_path / "sync.log").read_text(encoding="utf-8")
     assert "не найден факультет «автоматик…»" in log and "Институт кибернетики" in log
+
+
+def test_sync_skips_weeks_the_site_refuses(monkeypatch):
+    """Прошедшая неделя, на которую сайт ответил ошибкой 500, не спрашивается при каждом запуске."""
+    monkeypatch.setattr(bot, "client", GubkinClient())
+    weeks = sync.mondays(TODAY)
+    g = {"id": "1", "code": "А-26-01"}
+    past, future = weeks[0], weeks[-1]
+    all_tasks = [m for m, _, _ in sync.plan([g], {"А-26-01"}, weeks, MONDAY)]
+    assert past in all_tasks and future in all_tasks
+    failed = {f"{past.isoformat()}|1": time.time() - 3 * 86400, f"{future.isoformat()}|1": time.time() - 3600}
+    tasks = [m for m, _, _ in sync.plan([g], {"А-26-01"}, weeks, MONDAY, failed=failed)]
+    assert past not in tasks and future not in tasks and len(tasks) == len(all_tasks) - 2
+    failed = {f"{past.isoformat()}|1": time.time() - 8 * 86400, f"{future.isoformat()}|1": time.time() - 2 * 86400}
+    tasks = [m for m, _, _ in sync.plan([g], {"А-26-01"}, weeks, MONDAY, failed=failed)]
+    assert past in tasks and future in tasks  # прошло время — пробуем снова
+
+
+def test_sync_retries_when_site_did_not_answer(tmp_path, monkeypatch):
+    """Сайт не ответил на первый запрос (а старая копия есть) — в конце запуска пробуем ещё раз."""
+    from gubkin_api import GubkinError
+    calls = []
+
+    def fake_get(self, params):
+        calls.append(params)
+        if params.get("act") == "list":
+            raise AssertionError("список групп свежий — не должен запрашиваться")
+        if len(calls) == 1:
+            raise GubkinError("Сайт вернул страницу вместо данных")
+        gid = str(params["groupId"])
+        return week_for(gid, "ГМ-26-11", "Геология")
+    monkeypatch.setattr(GubkinClient, "_get", fake_get)
+    client = GubkinClient(cache_file=str(tmp_path / "cache.json"))
+    client.slim = slim_week
+    weeks = sync.mondays(dt.date.today())
+    for m in weeks:  # всё уже скачано, но давно — обновляем только ближние недели
+        client._cache[(m, "10706")] = (time.time() - 2 * 86400, {})
+    monkeypatch.setattr(bot, "client", client)
+    monkeypatch.setattr(bot, "_group", {"id": "10706", "code": bot.GROUP_CODE, "faculty": ""})
+    monkeypatch.setattr(bot, "_groups_cache", {"mtime": None, "list": []})
+    for name in ("GROUPS_FILE", "USER_GROUPS_FILE", "GROUP_FILE"):
+        monkeypatch.setattr(bot, name, tmp_path / getattr(bot, name).name)
+    bot.GROUPS_FILE.write_text(json.dumps({"faculties": [{"key": "geo", "groups": GROUPS[:1]}], "time": time.time(),
+                                           "tried": ["geo", "aivt"]}), encoding="utf-8")
+    monkeypatch.setattr(sync, "LOG", tmp_path / "sync.log")
+    monkeypatch.setattr(sync, "FAILED", tmp_path / "sync_failed.json")
+    monkeypatch.setattr(sync.time, "sleep", lambda s: None)
+
+    class R:
+        returncode = 0
+        stdout = b"{}"
+    monkeypatch.setattr(sync, "ssh", lambda *a, **kw: R())
+    sync.download(False, "root@test")  # не падает: текущая неделя скачалась со второй попытки
+    assert [c["groupId"] for c in calls].count("10706") == len(calls)
