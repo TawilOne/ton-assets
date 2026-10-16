@@ -12,7 +12,7 @@ gubkin_schedule_bot/cache.json
 gubkin_schedule_bot/tg_api.txt
 gubkin_schedule_bot/sync_status.json
 gubkin_schedule_bot/sync.log
-gubkin_schedule_bot/captcha.png
+gubkin_schedule_bot/captcha*.png
 gubkin_schedule_bot/server.txt
 gubkin_schedule_bot/lang.json
 gubkin_schedule_bot/sync_alert.txt
@@ -20,3 +20,4 @@ gubkin_schedule_bot/groups.json
 gubkin_schedule_bot/user_groups.json
 gubkin_schedule_bot/sync_failed.json
 gubkin_schedule_bot/*.tmp
+gubkin_schedule_bot/sync.lock

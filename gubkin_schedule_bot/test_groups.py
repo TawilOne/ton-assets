@@ -2,6 +2,7 @@
 python -m pytest test_groups.py"""
 
 import asyncio
+import os
 import base64
 import copy
 import datetime as dt
@@ -357,6 +358,7 @@ def test_sync_end_to_end(tmp_path, monkeypatch):
     monkeypatch.setattr(sync, "STATUS", tmp_path / "sync_status.json")
     monkeypatch.setattr(sync, "LOG", tmp_path / "sync.log")
     monkeypatch.setattr(sync, "FAILED", tmp_path / "sync_failed.json")
+    monkeypatch.setattr(sync, "LOCK", tmp_path / "sync.lock")
     monkeypatch.setattr(sync, "server", lambda: "root@test")
     monkeypatch.setattr(sync.time, "sleep", lambda s: None)
     pushed = {}
@@ -564,3 +566,37 @@ def test_sync_stops_without_connection_and_ignores_system_proxy(tmp_path, monkey
     log = (tmp_path / "sync.log").read_text(encoding="utf-8")
     assert "похоже, нет связи с сайтом" in log and "не удалось подключиться через прокси/VPN" in log
     assert "x" * 50 not in log and len(calls) < 30
+
+
+def test_only_one_sync_at_a_time(tmp_path, monkeypatch):
+    monkeypatch.setattr(sync, "LOCK", tmp_path / "sync.lock")
+    monkeypatch.setattr(sync, "LOG", tmp_path / "sync.log")
+    ran = []
+    monkeypatch.setattr(sync, "_run", lambda interactive: ran.append(1) or 0)
+    assert sync.run(True) == 0 and not sync.LOCK.exists()  # замок снят после работы
+    sync.LOCK.write_text("123")  # другая копия ещё работает
+    assert sync.run(True) == 1 and ran == [1]
+    assert "уже работает в другом окне" in (tmp_path / "sync.log").read_text(encoding="utf-8")
+    old = time.time() - 3600
+    os.utime(sync.LOCK, (old, old))  # брошенный замок (окно закрыли крестиком)
+    assert sync.run(True) == 0 and ran == [1, 1]
+
+
+def test_captcha_new_picture_each_try_and_keyboard_layout(tmp_path, monkeypatch):
+    shown, checked = [], []
+
+    class C:
+        def captcha_image(self):
+            shown.append(1)
+            return b"png"
+
+        def validate_captcha(self, code):
+            checked.append(code)
+            return code == "цэмэдк"
+    monkeypatch.setattr(bot, "client", C())
+    monkeypatch.setattr(sync, "HERE", tmp_path)
+    monkeypatch.setattr(sync.os, "name", "posix")
+    answers = iter(["неверно", "w'v'lr"])  # второй раз — в английской раскладке
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    sync.solve_captcha()
+    assert len(shown) == 2 and checked == ["неверно", "цэмэдк"]

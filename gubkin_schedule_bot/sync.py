@@ -104,19 +104,32 @@ def mondays(today: dt.date) -> list[dt.date]:
     return out
 
 
+# капча — русские буквы и цифры; набранное в английской раскладке переводим в русскую (wtvtlr -> цемедк)
+_EN_TO_RU = str.maketrans("qwertyuiop[]asdfghjkl;'zxcvbnm,.`QWERTYUIOP{}ASDFGHJKL:\"ZXCVBNM<>~",
+                          "йцукенгшщзхъфывапролджэячсмитьбюёЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭЯЧСМИТЬБЮЁ")
+
+
+def captcha_text(typed: str) -> str:
+    return "".join(typed.split()).translate(_EN_TO_RU)
+
+
 def solve_captcha() -> None:
-    img = bot.client.captcha_image()
-    pic = HERE / "captcha.png"
-    pic.write_bytes(img)
-    if os.name == "nt":
-        os.startfile(pic)  # откроется в просмотрщике картинок
-    else:
-        print(f"Картинка: {pic}")
-    for _ in range(3):
-        if bot.client.validate_captcha(input("Введите символы с картинки: ")):
+    """Показывает капчу и просит ввести код. После неверного кода сайт меняет капчу —
+    поэтому каждая попытка с новой картинкой."""
+    for attempt in range(3):
+        # у каждой попытки свой файл: просмотрщик Windows может показывать старую картинку из того же файла
+        pic = HERE / ("captcha.png" if attempt == 0 else f"captcha{attempt + 1}.png")
+        pic.write_bytes(bot.client.captcha_image())
+        if os.name == "nt":
+            os.startfile(pic)  # откроется в просмотрщике картинок
+        else:
+            print(f"Картинка: {pic}")
+        code = captcha_text(input("Введите символы с картинки (русские буквы и цифры): "))
+        if bot.client.validate_captcha(code):
             print("✅ Капча принята")
             return
-        print("Не подошло, попробуйте ещё раз.")
+        if attempt < 2:
+            print("Не подошло — открываю новую картинку, введите код с неё.")
     raise CaptchaRequired("капча не пройдена")
 
 
@@ -379,7 +392,36 @@ def download(interactive: bool, srv: str) -> int:
     return fetched - len(failed)
 
 
+LOCK = HERE / "sync.lock"
+
+
+def _take_lock() -> bool:
+    """Только одна копия sync за раз: две копии мешают друг другу (каждая получает свою капчу,
+    и коды не подходят). Замок старше 40 минут считаем брошенным (sync не живёт дольше)."""
+    try:
+        if LOCK.exists() and time.time() - LOCK.stat().st_mtime < 40 * 60:
+            return False
+        LOCK.write_text(str(os.getpid()), encoding="utf-8")
+        return True
+    except OSError:
+        return True
+
+
 def run(interactive: bool) -> int:
+    if not _take_lock():
+        say("sync уже работает в другом окне (или по расписанию) — дождитесь, пока он закончит. "
+            "Если других окон точно нет — удалите файл sync.lock или подождите 40 минут.")
+        return 1
+    try:
+        return _run(interactive)
+    finally:
+        try:
+            LOCK.unlink()
+        except OSError:
+            pass
+
+
+def _run(interactive: bool) -> int:
     srv = server()
     try:
         prev = json.loads(STATUS.read_text(encoding="utf-8"))
