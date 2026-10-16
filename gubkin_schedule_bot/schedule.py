@@ -413,11 +413,11 @@ def day_title(date_iso: str, weekday: str, week_type: str = "", today: dt.date |
 
 
 def format_lesson_html(l: Lesson, lang: str = "ru") -> str:
-    time = f"<b>{l.start}–{l.end}</b>" if l.end else f"<b>{l.start}</b>"
+    time = f"<b>{_esc(l.start)}–{_esc(l.end)}</b>" if l.end else f"<b>{_esc(l.start)}</b>"
     name = i18n.subject(l.subject, lang)
     subject = f"<b>{_esc(name)}</b>"
     if l.cancelled:
-        lines = [f"❌ <s>{l.start}–{l.end}  {_esc(name)}</s>", f"<i>{i18n.t('cancelled', lang)}</i>"]
+        lines = [f"❌ <s>{_esc(l.start)}–{_esc(l.end)}  {_esc(name)}</s>", f"<i>{i18n.t('cancelled', lang)}</i>"]
     else:
         lines = [f"🕘 {time}", f"{kind_icon(l.kind)} {subject}"]
         info = []

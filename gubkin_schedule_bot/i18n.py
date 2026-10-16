@@ -164,6 +164,16 @@ TEXT = {
         "en": "The website is asking for a captcha. Send /captcha and type the code from the picture.",
         "fr": "Le site demande un captcha. Envoyez /captcha et saisissez le code de l'image.",
     },
+    "site_busy": {
+        "ru": "⏳ Сайт Губкина временно ограничил запросы. Попробуйте через несколько минут.",
+        "en": "⏳ The Gubkin University website is temporarily limiting requests. Please try again in a few minutes.",
+        "fr": "⏳ Le site de l'Université Gubkin limite temporairement les requêtes. Réessayez dans quelques minutes.",
+    },
+    "too_fast": {
+        "ru": "🐢 Слишком много сообщений подряд. Подождите полминуты и попробуйте снова.",
+        "en": "🐢 Too many messages in a row. Please wait half a minute and try again.",
+        "fr": "🐢 Trop de messages d'affilée. Attendez une trentaine de secondes et réessayez.",
+    },
     "site_down": {
         "ru": "⏳ Сайт Губкина не отвечает.\n\n"
               "Если на компьютере с ботом включён VPN — сайт может не открываться через него. "

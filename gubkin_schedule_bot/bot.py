@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 import asyncio
+import collections
 import datetime as dt
 import io
 import json
@@ -37,8 +38,8 @@ from zoneinfo import ZoneInfo
 from telegram import (InlineKeyboardButton, InlineKeyboardMarkup, InputFile, KeyboardButton,
                       ReplyKeyboardMarkup, Update, WebAppInfo)
 from telegram.error import Forbidden
-from telegram.ext import (Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler,
-                          TypeHandler, filters)
+from telegram.ext import (Application, ApplicationHandlerStop, CallbackQueryHandler, CommandHandler,
+                          ContextTypes, MessageHandler, TypeHandler, filters)
 
 import i18n
 import my_commands as my
@@ -372,7 +373,8 @@ async def _run(update: Update, start: dt.date, end: dt.date, grp: dict | None = 
             await update.effective_message.reply_text(i18n.t("stale_site", lang))
         return lessons
     except CaptchaRequired:
-        await update.effective_message.reply_text(i18n.t("captcha_needed", lang))
+        admin = update.effective_user and update.effective_user.id == _admin_id()
+        await update.effective_message.reply_text(i18n.t("captcha_needed" if admin else "site_busy", lang))
     except (GubkinError, OSError) as e:
         log.exception("fetch failed")
         if "timed out" in str(e).lower() or "connect" in str(e).lower():
@@ -558,6 +560,13 @@ async def cmd_all(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_captcha(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    # капчу вводит только администратор: иначе любой мог бы гонять запросы к сайту от имени бота
+    if update.effective_user.id != _admin_id():
+        await update.effective_message.reply_text(i18n.t("site_busy", _lang(update)))
+        return
+    if client.offline:
+        await update.effective_message.reply_text("Капчу вводят на ноутбуке: запустите sync_now.bat.")
+        return
     try:
         img = await asyncio.to_thread(_locked, client.captcha_image)
     except (GubkinError, OSError) as e:
@@ -578,7 +587,7 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if ctx.user_data.pop("await_time", False):  # ответ на «во сколько присылать расписание?»
         await _set_time(update, ctx, text)
         return
-    if not ctx.user_data.pop("captcha", False):
+    if not ctx.user_data.pop("captcha", False) or update.effective_user.id != _admin_id():
         grp = _find_group(text) if len(text) <= 20 else None
         if grp:  # написали код группы, например «ГМ-26-12» — выбираем её
             await _group_chosen(update, grp)
@@ -994,6 +1003,13 @@ async def track_user(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if member and member.chat.type == "private":  # пользователь заблокировал бота или снова запустил
         _mark_blocked(user.id, member.new_chat_member.status in ("kicked", "left"), now)
         return
+    if user.id != _admin_id() and _flooding(user.id):  # защита от засыпания бота сообщениями
+        if len(_hits[user.id]) == RATE_MAX + 1 and update.effective_message:  # предупреждаем один раз
+            try:
+                await update.effective_message.reply_text(i18n.t("too_fast", _lang(update)))
+            except Exception:
+                pass
+        raise ApplicationHandlerStop  # дальше это сообщение не обрабатываем
     text = update.effective_message.text if update.effective_message else ""
     action = _action(update)
     with _users_lock:
@@ -1022,6 +1038,22 @@ async def track_user(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                                        parse_mode="HTML")
         except Exception:
             log.warning("cannot notify admin")
+
+
+RATE_MAX, RATE_WINDOW = 20, 30.0  # не больше 20 сообщений и нажатий за 30 секунд от одного человека
+_hits: dict[int, collections.deque] = {}
+
+
+def _flooding(user_id: int) -> bool:
+    now = time.monotonic()
+    if len(_hits) > 10000:  # память не растёт бесконечно: забываем тех, кто давно молчит
+        for uid in [u for u, q in _hits.items() if not q or now - q[-1] > RATE_WINDOW]:
+            del _hits[uid]
+    q = _hits.setdefault(user_id, collections.deque())
+    while q and now - q[0] > RATE_WINDOW:
+        q.popleft()
+    q.append(now)
+    return len(q) > RATE_MAX
 
 
 def _mark_blocked(user_id, blocked: bool, when: str | None = None) -> None:
