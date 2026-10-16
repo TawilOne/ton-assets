@@ -32,7 +32,7 @@ os.chdir(HERE)
 sys.path.insert(0, str(HERE))
 
 import bot  # noqa: E402  — та же группа, cache.json и cookies.json, что у бота на ноутбуке
-from gubkin_api import CaptchaRequired, GubkinError, normalize_code  # noqa: E402
+from gubkin_api import CaptchaRequired, GubkinError, normalize_code, write_atomic  # noqa: E402
 from schedule import semester_bounds, slim_week  # noqa: E402
 
 DEFAULT_SERVER = "root@153.76.167.68"
@@ -177,7 +177,7 @@ def refresh_groups(interactive: bool) -> list[dict]:
             facs = _fetch_faculties(interactive)
             if facs:
                 data = {"faculties": facs, "time": time.time(), "tried": [f["key"] for f in bot.FACULTIES]}
-                bot.GROUPS_FILE.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+                write_atomic(bot.GROUPS_FILE, json.dumps(data, ensure_ascii=False))
         except CaptchaRequired:
             raise
         except (GubkinError, OSError, ValueError, KeyError, TypeError) as e:
@@ -222,7 +222,7 @@ def _load_failed() -> dict[str, float]:
 
 def _save_failed(data: dict) -> None:
     try:
-        FAILED.write_text(json.dumps(data), encoding="utf-8")
+        write_atomic(FAILED, json.dumps(data))
     except OSError:
         pass
 
@@ -365,7 +365,7 @@ def run(interactive: bool) -> int:
     except Exception as e:  # нет интернета, сайт лежит и т.п. — попробуем в следующий раз
         status["error"] = str(e)[:300]
         say(f"не удалось скачать: {e}")
-    STATUS.write_text(json.dumps(status, ensure_ascii=False), encoding="utf-8")
+    write_atomic(STATUS, json.dumps(status, ensure_ascii=False))
 
     try:
         if status["ok"] or bot.client.cache_file.exists():

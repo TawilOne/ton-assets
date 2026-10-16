@@ -199,3 +199,21 @@ def test_times_without_leading_zero_sorted():
     assert ls[0].start == "08:30" and ls[0].end == "10:00"
     tue = [l for l in ls if l.date == "2026-10-06"]
     assert [l.start for l in tue] == ["08:30", "10:15"]  # раньше «10:15» шло раньше «8:30»: сортировка была по тексту
+
+
+def test_cache_survives_power_loss_during_write(tmp_path, monkeypatch):
+    """Ноутбук выключился посреди записи cache.json — остаётся прежний целый файл."""
+    import gubkin_api
+    cache = tmp_path / "cache.json"
+    c = GubkinClient(cache_file=str(cache))
+    c._cache[(dt.date(2026, 10, 5), "777")] = (1.0, WEEK)
+    c._save_cache()
+    before = cache.read_text(encoding="utf-8")
+
+    def crash(*a, **kw):
+        raise OSError("питание пропало")
+    monkeypatch.setattr(gubkin_api.os, "replace", crash)
+    c._cache[(dt.date(2026, 10, 12), "777")] = (2.0, WEEK)
+    c._save_cache()  # запись «оборвалась» до подмены файла
+    assert cache.read_text(encoding="utf-8") == before
+    assert len(GubkinClient(cache_file=str(cache), offline=True)._cache) == 1

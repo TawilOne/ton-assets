@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 import pathlib
 import time
 
@@ -30,6 +31,17 @@ _LATIN_TO_CYR = str.maketrans({
 def normalize_code(code: str) -> str:
     """'гм-26-11', 'ГM-26-11' (латинская M), 'ГМ – 26 – 11' -> 'ГМ-26-11'."""
     return "".join(code.upper().translate(_LATIN_TO_CYR).split())
+
+
+def write_atomic(path: pathlib.Path, text: str) -> None:
+    """Записывает файл так, что он всегда целый: сначала во временный файл, потом мгновенная подмена.
+    Если ноутбук выключится посреди записи, останется прежняя версия, а не обрывок."""
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
 
 
 class GubkinError(Exception):
@@ -91,7 +103,7 @@ class GubkinClient:
             return
         data = {f"{m.isoformat()}|{g}": v for (m, g), v in self._cache.items()}
         try:
-            self.cache_file.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            write_atomic(self.cache_file, json.dumps(data, ensure_ascii=False))
         except OSError:
             pass
 
@@ -110,7 +122,7 @@ class GubkinClient:
         data = [{"name": c.name, "value": c.value, "domain": c.domain, "path": c.path}
                 for c in self.s.cookies]
         try:
-            self.cookie_file.write_text(json.dumps(data), encoding="utf-8")
+            write_atomic(self.cookie_file, json.dumps(data))
         except OSError:
             pass
 
