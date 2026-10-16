@@ -531,3 +531,36 @@ def test_sync_retries_when_site_did_not_answer(tmp_path, monkeypatch):
     monkeypatch.setattr(sync, "ssh", lambda *a, **kw: R())
     sync.download(False, "root@test")  # не падает: текущая неделя скачалась со второй попытки
     assert [c["groupId"] for c in calls].count("10706") == len(calls)
+
+
+def test_sync_stops_without_connection_and_ignores_system_proxy(tmp_path, monkeypatch):
+    """VPN выключен, а в Windows остался его прокси: sync идёт мимо него; если связи нет совсем —
+    останавливается после нескольких неудач и пишет коротко, без простыни ошибок."""
+    import requests
+    calls = []
+
+    def fake_req(self, method, url, **kw):
+        calls.append(url)
+        raise requests.exceptions.ProxyError("Unable to connect to proxy 127.0.0.1:12334 " + "x" * 500)
+    monkeypatch.setattr(GubkinClient, "_req", fake_req)
+    client = GubkinClient(cache_file=str(tmp_path / "cache.json"))
+    monkeypatch.setattr(bot, "client", client)
+    monkeypatch.setattr(bot, "_group", {"id": "10706", "code": bot.GROUP_CODE, "faculty": ""})
+    monkeypatch.setattr(bot, "_groups_cache", {"mtime": None, "list": []})
+    for name in ("GROUPS_FILE", "USER_GROUPS_FILE", "GROUP_FILE"):
+        monkeypatch.setattr(bot, name, tmp_path / getattr(bot, name).name)
+    bot.GROUPS_FILE.write_text(json.dumps(GROUPS_JSON, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(sync, "LOG", tmp_path / "sync.log")
+    monkeypatch.setattr(sync, "FAILED", tmp_path / "sync_failed.json")
+    monkeypatch.setattr(sync.time, "sleep", lambda s: None)
+
+    class R:
+        returncode = 0
+        stdout = b"{}"
+    monkeypatch.setattr(sync, "ssh", lambda *a, **kw: R())
+    with pytest.raises(Exception):
+        sync.download(False, "root@test")
+    assert client.s.trust_env is False  # системный прокси Windows не используется
+    log = (tmp_path / "sync.log").read_text(encoding="utf-8")
+    assert "похоже, нет связи с сайтом" in log and "не удалось подключиться через прокси/VPN" in log
+    assert "x" * 50 not in log and len(calls) < 30

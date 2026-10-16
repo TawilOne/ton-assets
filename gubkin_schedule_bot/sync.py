@@ -31,6 +31,8 @@ HERE = pathlib.Path(__file__).resolve().parent
 os.chdir(HERE)
 sys.path.insert(0, str(HERE))
 
+import requests  # noqa: E402
+
 import bot  # noqa: E402  — та же группа, cache.json и cookies.json, что у бота на ноутбуке
 from gubkin_api import CaptchaRequired, GubkinError, normalize_code, write_atomic  # noqa: E402
 from schedule import semester_bounds, slim_week  # noqa: E402
@@ -117,6 +119,23 @@ def solve_captcha() -> None:
         print("Не подошло, попробуйте ещё раз.")
     raise CaptchaRequired("капча не пройдена")
 
+
+STOP_AFTER = 10  # столько неудач подряд — значит, связи с сайтом нет: останавливаемся, а не перебираем всё
+
+
+def _short(e: Exception) -> str:
+    """Понятная короткая причина вместо длинного текста ошибки requests."""
+    if isinstance(e, requests.exceptions.ProxyError):
+        return "не удалось подключиться через прокси/VPN"
+    if isinstance(e, requests.exceptions.Timeout):
+        return "сайт не ответил вовремя"
+    if isinstance(e, requests.exceptions.ConnectionError):
+        return "нет связи с сайтом"
+    return str(e)[:150]
+
+
+NO_LINK = {"не удалось подключиться через прокси/VPN", "сайт не ответил вовремя", "нет связи с сайтом",
+           "сайт не ответил"}
 
 DAY = 20 * 3600  # «раз в сутки»: запуски идут каждые 3 часа, 20 часов — с запасом
 
@@ -281,6 +300,9 @@ def compact(weeks: list[dt.date]) -> None:
 def download(interactive: bool, srv: str) -> int:
     """Скачивает расписание по плану (см. plan). Отдельные недели сайт может не отдавать (летние —
     ошибкой 500): их пропускаем. Ошибка — только если у выбранной группы не скачалась текущая неделя."""
+    # к сайту Губкина — напрямую, мимо прокси из настроек Windows: выключенный VPN оставляет там
+    # свой адрес (127.0.0.1:…), и тогда ни один запрос не проходит; российскому сайту VPN не нужен
+    bot.client.s.trust_env = False
     _with_captcha(interactive, bot._ensure_group)
     bot.client.cache_ttl = 60  # то, что решили обновить, — берём с сайта, а не из кэша
     bot.client.delay = 1.5     # частые запросы подряд сайт принимает за робота и просит капчу
@@ -311,16 +333,26 @@ def download(interactive: bool, srv: str) -> int:
             _save_failed(bad_weeks)
             raise
         except (GubkinError, OSError, ValueError) as e:
-            failed[key] = str(e)
+            failed[key] = _short(e)
             if isinstance(e, GubkinError):  # сайт ответил ошибкой — запомним, чтобы не спрашивать каждый раз
                 bad_weeks[f"{mon.isoformat()}|{g['id']}"] = time.time()
 
+    in_a_row = 0  # неудач подряд
     for i, (mon, g, chosen) in enumerate(tasks, 1):
         if time.monotonic() > deadline:
             say(f"время вышло, осталось запросов: {len(tasks) - i + 1} — докачаю в следующий раз")
             break
+        if in_a_row >= STOP_AFTER:
+            if interactive:
+                print()
+            say(f"{STOP_AFTER} запросов подряд не прошли — похоже, нет связи с сайтом. Остановился, "
+                "попробую в следующий раз")
+            break
         fetched += 1
         fetch(mon, g, chosen)
+        # считаем только «нет связи»; ответ сайта с ошибкой (500 на летние недели) — это связь есть
+        no_link = failed.get((mon, g["code"], chosen)) in NO_LINK
+        in_a_row = in_a_row + 1 if no_link else 0
         if interactive:
             print(f"\r  {i}/{len(tasks)}  {g['code']:<14}", end="", flush=True)
     if interactive and tasks:
