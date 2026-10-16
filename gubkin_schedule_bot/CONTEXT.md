@@ -19,7 +19,7 @@ Telegram-бот расписания РГУ нефти и газа им. Губ�
 
 ## Как всё работает сейчас
 - Бот живёт на VPS FirstVDS в Москве (`root@153.76.167.68`, Ubuntu 24.04, служба `gubkin-bot`).
-- Telegram в РФ заблокирован → бот ходит через **Cloudflare Worker** (адрес — в файле tg_api.txt на сервере)
+- Telegram в РФ заблокирован → бот ходит через **Cloudflare Worker** (адрес — на сервере в /etc/systemd/system/gubkin-bot.service.d/relay.conf)
   (переменная `TG_API_BASE`, включено `deploy/relay.sh`).
 - Сайт Губкина **не пускает серверы хостингов** (HTTPS с VPS не открывается) → бот на сервере в режиме
   `GUBKIN_OFFLINE=1`, расписание присылает **ноутбук** (`sync.py`, задача Windows `GubkinSync`:
