@@ -600,3 +600,9 @@ def test_captcha_new_picture_each_try_and_keyboard_layout(tmp_path, monkeypatch)
     monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
     sync.solve_captcha()
     assert len(shown) == 2 and checked == ["неверно", "цэмэдк"]
+
+
+def test_start_mentions_feedback_contact(env):
+    u = update(uid=12)
+    run(bot.cmd_start(u, ctx()))
+    assert u.effective_message.sent[0][0].endswith("✉️ Если заметили ошибку в расписании — напишите @TawiOner")

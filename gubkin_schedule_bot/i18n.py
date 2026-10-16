@@ -127,6 +127,11 @@ TEXT = {
               "peuvent contenir des erreurs. Ne vous y fiez pas entièrement et consultez l'emploi du temps "
               f"officiel{NBSP}: lk.gubkin.ru/schedule",
     },
+    "feedback": {
+        "ru": "✉️ Если заметили ошибку в расписании — напишите @TawiOner",
+        "en": "✉️ If you notice a mistake in the timetable, message @TawiOner",
+        "fr": "✉️ Si vous remarquez une erreur dans l'emploi du temps, écrivez à @TawiOner",
+    },
     "btn_today": {"ru": "📅 Сегодня", "en": "📅 Today", "fr": "📅 Aujourd'hui"},
     "btn_tomorrow": {"ru": "➡️ Завтра", "en": "➡️ Tomorrow", "fr": "➡️ Demain"},
     "btn_week": {"ru": "🗓 Неделя", "en": "🗓 This week", "fr": "🗓 Cette semaine"},
