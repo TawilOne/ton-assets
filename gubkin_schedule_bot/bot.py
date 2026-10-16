@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Telegram-бот расписания РГУ им. Губкина для всех групп факультета геологии.
-Каждый пользователь выбирает свою группу (/group); по умолчанию — ГМ-26-11.
+"""Telegram-бот расписания РГУ им. Губкина для всех групп нескольких факультетов (FACULTIES):
+геологии и геофизики, автоматики и вычислительной техники. Каждый пользователь выбирает
+факультет и группу (/group); те, кто пришёл до выбора групп, получили ГМ-26-11.
 
 Запуск:  BOT_TOKEN=123:abc python bot.py
 Переменные окружения:
@@ -60,7 +61,7 @@ client = GubkinClient(cookie_file=str(DATA_DIR / "cookies.json"), cache_file=str
                       offline=os.environ.get("GUBKIN_OFFLINE") == "1")  # расписание присылает ноутбук (sync.py)
 client.slim = slim_week  # в кэше — только нужные поля: кэш всего факультета большой
 GROUP_FILE = DATA_DIR / "group.json"  # группа по умолчанию и её факультет
-GROUPS_FILE = DATA_DIR / "groups.json"  # все группы факультета — присылает ноутбук (sync.py)
+GROUPS_FILE = DATA_DIR / "groups.json"  # все группы факультетов — присылает ноутбук (sync.py)
 USER_GROUPS_FILE = DATA_DIR / "user_groups.json"  # кто какую группу выбрал: {id пользователя: "ГМ-26-11"}
 USERS_FILE = DATA_DIR / "users.json"  # кто пользуется ботом (видно только администратору)
 _users_lock = threading.Lock()
@@ -105,7 +106,17 @@ def _fetch(start: dt.date, end: dt.date, grp: dict):
         return lessons, client.stale
 
 
-# ---- группы факультета и выбор группы
+# ---- факультеты, группы и выбор группы
+
+# Факультеты в боте: hint — часть названия на сайте (по ней ноутбук находит факультет), названия кнопок.
+# Чтобы добавить факультет — допишите строку; ноутбук сам скачает его группы при следующем sync.
+FACULTIES = [
+    {"key": "geo", "hint": "геолог",
+     "ru": "⛏ Геологии и геофизики", "en": "⛏ Geology & Geophysics", "fr": "⛏ Géologie et géophysique"},
+    {"key": "aivt", "hint": "автоматик",
+     "ru": "💻 Автоматики и ВТ", "en": "💻 Automation & Computing", "fr": "💻 Automatique et informatique"},
+]
+DEFAULT_FACULTY = "geo"  # факультет группы по умолчанию (GROUP_CODE)
 
 _groups_cache: dict = {"mtime": None, "list": []}
 _ug_lock = threading.Lock()
@@ -121,10 +132,14 @@ def _faculty_groups() -> list[dict]:
     if mtime != _groups_cache["mtime"]:
         found: dict[str, dict] = {}
         try:
-            for g in json.loads(GROUPS_FILE.read_text(encoding="utf-8")).get("groups") or []:
-                code = normalize_code(str(g.get("code") or ""))
-                if g.get("id") and code and code not in found:
-                    found[code] = {"id": str(g["id"]), "code": code}
+            data = json.loads(GROUPS_FILE.read_text(encoding="utf-8"))
+            # новый формат: {"faculties": [{"key", "id", "name", "groups"}]}; старый — один факультет геологии
+            facs = data.get("faculties") or [{"key": DEFAULT_FACULTY, "groups": data.get("groups") or []}]
+            for f in facs:
+                for g in f.get("groups") or []:
+                    code = normalize_code(str(g.get("code") or ""))
+                    if g.get("id") and code and code not in found:
+                        found[code] = {"id": str(g["id"]), "code": code, "fac": f.get("key") or DEFAULT_FACULTY}
         except (OSError, ValueError, AttributeError, TypeError):
             found = {}
         _groups_cache.update(mtime=mtime, list=[found[c] for c in sorted(found)])
@@ -144,7 +159,7 @@ def _default_group() -> dict:
                 gid = saved.get("id")
         except (OSError, ValueError, AttributeError):
             pass
-    return {"id": str(gid) if gid else None, "code": GROUP_CODE}
+    return {"id": str(gid) if gid else None, "code": GROUP_CODE, "fac": DEFAULT_FACULTY}
 
 
 def _find_group(code: str) -> dict | None:
@@ -212,11 +227,23 @@ def _year_label(year, lang: str) -> str:
     return i18n.course(n, lang) if 1 <= n <= 6 else f"20{year:02d}"
 
 
-def _by_year() -> list[tuple]:
-    """[(год поступления или None, [группы])], первый курс — первым."""
+def _faculties() -> list[dict]:
+    """Факультеты, по которым есть группы, — в порядке FACULTIES."""
+    keys = {g.get("fac") for g in _faculty_groups()}
+    return [f for f in FACULTIES if f["key"] in keys]
+
+
+def _faculty_label(key: str, lang: str) -> str:
+    f = next((f for f in FACULTIES if f["key"] == key), None)
+    return (f.get(lang) or f["ru"]) if f else key
+
+
+def _by_year(fac: str | None = None) -> list[tuple]:
+    """[(год поступления или None, [группы])] факультета fac, первый курс — первым."""
     out: dict = {}
     for g in _faculty_groups():
-        out.setdefault(_year(g["code"]), []).append(g)
+        if fac is None or g.get("fac") == fac:
+            out.setdefault(_year(g["code"]), []).append(g)
     return sorted(out.items(), key=lambda kv: (kv[0] is None, -(kv[0] or 0)))
 
 
@@ -224,23 +251,33 @@ def _rows(buttons: list, n: int = 3) -> list[list]:
     return [buttons[i:i + n] for i in range(0, len(buttons), n)]
 
 
-def _picker(lang: str, year: str | None = None) -> tuple[str, InlineKeyboardMarkup]:
-    """Выбор группы: сначала курс, потом группа. Если курс один — сразу группы."""
-    years = _by_year()
+def _picker(lang: str, fac: str | None = None, year: str | None = None) -> tuple[str, InlineKeyboardMarkup]:
+    """Выбор группы: факультет → курс → группа. Шаг, где выбирать не из чего, пропускается."""
     note = "" if _groups_cache["list"] else "\n\n" + i18n.t("group_list_loading", lang)
+    facs = _faculties()
+    if fac is None or fac not in [f["key"] for f in facs]:
+        if len(facs) > 1:
+            buttons = [[InlineKeyboardButton(f.get(lang) or f["ru"], callback_data=f"grp:f:{f['key']}")] for f in facs]
+            return i18n.t("group_choose_faculty", lang) + note, InlineKeyboardMarkup(buttons)
+        fac = facs[0]["key"] if facs else None
+    back_to_facs = [InlineKeyboardButton(i18n.t("btn_back", lang), callback_data="grp:b")] if len(facs) > 1 else None
+    years = _by_year(fac)
+    head = _faculty_label(fac, lang) + "\n" if len(facs) > 1 else ""
     if year is None and len(years) > 1:
-        buttons = [InlineKeyboardButton(_year_label(y, lang), callback_data=f"grp:y:{'' if y is None else y}")
+        buttons = [InlineKeyboardButton(_year_label(y, lang), callback_data=f"grp:y:{fac}:{'' if y is None else y}")
                    for y, _ in years]
-        return i18n.t("group_choose_year", lang) + note, InlineKeyboardMarkup(_rows(buttons))
+        rows = _rows(buttons) + ([back_to_facs] if back_to_facs else [])
+        return head + i18n.t("group_choose_year", lang) + note, InlineKeyboardMarkup(rows)
     wanted = None if year in (None, "") else int(year)
-    groups = next((gs for y, gs in years if y == wanted), None) if len(years) > 1 else years[0][1]
-    groups = groups or []
+    groups = next((gs for y, gs in years if y == wanted), []) if len(years) > 1 else (years[0][1] if years else [])
     buttons = [InlineKeyboardButton(g["code"], callback_data=f"grp:s:{g['code']}")
                for g in groups if len(f"grp:s:{g['code']}".encode()) <= 64][:96]  # ограничения Telegram
     rows = _rows(buttons)
-    if len(years) > 1:
-        rows.append([InlineKeyboardButton(i18n.t("btn_back", lang), callback_data="grp:b")])
-    return i18n.t("group_choose", lang) + note, InlineKeyboardMarkup(rows)
+    if len(years) > 1:  # назад — к курсам этого факультета
+        rows.append([InlineKeyboardButton(i18n.t("btn_back", lang), callback_data=f"grp:f:{fac}")])
+    elif back_to_facs:
+        rows.append(back_to_facs)
+    return head + i18n.t("group_choose", lang) + note, InlineKeyboardMarkup(rows)
 
 
 async def _ask_group(update: Update, head: str = "") -> None:
@@ -276,7 +313,8 @@ async def _group_chosen(update: Update, grp: dict) -> None:
 async def on_group(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     q = update.callback_query
     lang = _lang(update)
-    _, act, arg = ((q.data or "") + "::").split(":")[:3]
+    parts = (q.data or "").split(":")
+    act, arg = (parts + ["", ""])[1:3]
     await q.answer()
     if act == "s":
         grp = _find_group(arg)
@@ -286,11 +324,14 @@ async def on_group(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             return
         await _edit(q, i18n.t("group_current", lang, code=grp["code"]), None)
         await _group_chosen(update, grp)
-    elif act == "y":
+    elif act == "f":  # факультет выбран — его курсы
         await _edit(q, *_picker(lang, arg))
+    elif act == "y":  # курс выбран — его группы; «grp:y:26» — кнопки до появления факультетов
+        fac, year = (parts[2], parts[3]) if len(parts) > 3 else (DEFAULT_FACULTY, arg)
+        await _edit(q, *_picker(lang, fac, year))
     elif act == "menu":  # кнопка в настройках — выбор группы новым сообщением
         await _ask_group(update)
-    else:  # "b" — назад к курсам
+    else:  # "b" — назад к выбору факультета
         await _edit(q, *_picker(lang))
 
 
@@ -1175,14 +1216,16 @@ COMMANDS = {  # меню команд Telegram (кнопка «Меню» сле
 
 # имя и описание бота для тех, у кого Telegram на английском/французском (русские — из BotFather)
 BOT_PROFILE = {
-    "en": ("Gubkin Timetable (Beta)", "Gubkin University timetable for every group of the geology faculty, "
-           "with a map showing where your class is.",
-           "Gubkin University timetable for every group of the geology faculty: choose your group and get "
+    "en": ("Gubkin Timetable (Beta)", "Gubkin University timetable for the Geology and the Automation & "
+           "Computing faculties, with a map showing where your class is.",
+           "Gubkin University timetable for every group of the Geology and the Automation & Computing "
+           "faculties: choose your group and get "
            "today's and tomorrow's classes, this week, and a floor map with the room of your class. "
            "The bot is in beta, so check the official timetable too."),
-    "fr": ("Emploi du temps Gubkin (bêta)", "Emploi du temps de l'Université Gubkin pour tous les groupes "
-           "de la faculté de géologie, avec le plan de la salle de cours.",
-           "Emploi du temps de l'Université Gubkin pour tous les groupes de la faculté de géologie\u00a0: "
+    "fr": ("Emploi du temps Gubkin (bêta)", "Emploi du temps de l'Université Gubkin pour les facultés de "
+           "géologie et d'automatique et informatique, avec le plan de la salle de cours.",
+           "Emploi du temps de l'Université Gubkin pour tous les groupes des facultés de géologie et "
+           "d'automatique et informatique\u00a0: "
            "choisissez votre groupe et consultez les cours d'aujourd'hui et de demain, la semaine, et un plan "
            "de l'étage avec la salle de votre cours. Le bot est en version bêta\u00a0: vérifiez aussi "
            "l'emploi du temps officiel."),

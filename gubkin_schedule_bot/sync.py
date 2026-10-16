@@ -1,8 +1,8 @@
-"""Ноутбук → сервер: скачивает расписание групп факультета и отправляет его боту на сервер.
+"""Ноутбук → сервер: скачивает расписание групп факультетов (bot.FACULTIES) и отправляет его боту на сервер.
 
 Что скачивается (чем меньше запросов, тем реже сайт просит капчу):
   1) группы, которые выбрали пользователи бота, — текущая и 2 следующие недели, каждый раз;
-  2) все остальные группы факультета — текущая и следующая неделя, раз в сутки
+  2) все остальные группы факультетов — текущая и следующая неделя, раз в сутки
      (чтобы новичок сразу увидел расписание своей группы);
   3) выбранные группы — остальные недели семестра: будущие раз в сутки, прошедшие — если их нет.
 За один запуск — не дольше 11 минут (вручную — 25): что не успели, докачается в следующий раз.
@@ -131,30 +131,52 @@ def _with_captcha(interactive: bool, func, *args):
             solve_captcha()
 
 
+def _group_rows(rows) -> list[dict]:
+    return [{"id": str(g["id"]), "code": normalize_code(str(g.get("code") or g.get("name") or ""))}
+            for g in rows or [] if isinstance(g, dict) and g.get("id") and (g.get("code") or g.get("name"))]
+
+
+def _fetch_faculties(interactive: bool) -> list[dict]:
+    """Факультеты из bot.FACULTIES и их группы с сайта: 1 запрос на список факультетов + по одному
+    на каждый факультет. Не найденный по названию факультет пропускаем (пишем в журнал)."""
+    site = _with_captcha(interactive, bot.client.faculties)
+    name = lambda f: str(f.get("name") or f.get("title") or "")
+    out = []
+    for cfg in bot.FACULTIES:
+        matches = [f for f in site if cfg["hint"] in name(f).lower()]
+        chosen = None
+        for f in matches:
+            groups = _group_rows(_with_captcha(interactive, bot.client.groups, f["id"]))
+            # у факультета группы по умолчанию проверяем, что это он и есть
+            if groups and (cfg["key"] != bot.DEFAULT_FACULTY or any(g["code"] == bot.GROUP_CODE for g in groups)):
+                chosen = {"key": cfg["key"], "id": f["id"], "name": name(f), "groups": groups}
+                break
+        if chosen is None and cfg["key"] == bot.DEFAULT_FACULTY:  # не нашли по названию — ищем по группе
+            f, rows, _ = _with_captcha(interactive, bot.client.find_faculty, bot.GROUP_CODE, bot.FACULTY_HINT)
+            chosen = {"key": cfg["key"], "id": f["id"], "name": name(f), "groups": _group_rows(rows)}
+        if chosen is None:
+            say(f"не найден факультет «{cfg['hint']}…». Факультеты на сайте: " + "; ".join(name(f) for f in site))
+            continue
+        out.append(chosen)
+        say(f"{chosen['name']}: групп {len(chosen['groups'])}")
+    return out
+
+
 def refresh_groups(interactive: bool) -> list[dict]:
-    """Список всех групп факультета (groups.json): с сайта раз в сутки — это 1–3 запроса."""
+    """Списки групп факультетов (groups.json): с сайта раз в сутки — это 2–4 запроса."""
     try:
         data = json.loads(bot.GROUPS_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         data = {}
-    if not (data.get("groups") and time.time() - data.get("time", 0) < DAY):
+    fresh = time.time() - data.get("time", 0) < DAY
+    # искали ли уже все факультеты из bot.FACULTIES (в старом формате поля нет; добавили факультет — ищем сразу)
+    tried = set(data.get("tried") or [])
+    if not fresh or not {f["key"] for f in bot.FACULTIES} <= tried:
         try:
-            fac, rows = data.get("faculty") or {}, None
-            fid = fac.get("id") or bot._group.get("faculty_id")
-            if fid:  # факультет уже известен — один запрос
-                fac = {"id": fid, "name": fac.get("name") or bot._group.get("faculty") or ""}
-                rows = _with_captcha(interactive, bot.client.groups, fid)
-                if not any(normalize_code(str(g.get("code") or g.get("name") or "")) == bot.GROUP_CODE for g in rows):
-                    rows = None  # группы по умолчанию там нет — ищем факультет заново
-            if rows is None:
-                f, rows, _ = _with_captcha(interactive, bot.client.find_faculty, bot.GROUP_CODE, bot.FACULTY_HINT)
-                fac = {"id": f.get("id"), "name": f.get("name") or f.get("title") or ""}
-            groups = [{"id": str(g["id"]), "code": normalize_code(str(g.get("code") or g.get("name") or ""))}
-                      for g in rows if g.get("id") and (g.get("code") or g.get("name"))]
-            if groups:
-                data = {"faculty": fac, "groups": groups, "time": time.time()}
+            facs = _fetch_faculties(interactive)
+            if facs:
+                data = {"faculties": facs, "time": time.time(), "tried": [f["key"] for f in bot.FACULTIES]}
                 bot.GROUPS_FILE.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-                say(f"групп на факультете: {len(groups)}")
         except CaptchaRequired:
             raise
         except (GubkinError, OSError, ValueError, KeyError, TypeError) as e:

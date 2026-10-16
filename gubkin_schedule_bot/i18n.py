@@ -54,21 +54,21 @@ def set_lang(user_id, lang: str) -> None:
 
 TEXT = {
     "help": {
-        "ru": "📅 Расписание РГУ им. Губкина, факультет геологии\n{group_line}\n\n"
+        "ru": "📅 Расписание РГУ им. Губкина\n{group_line}\n\n"
               "/today — на сегодня\n"
               "/tomorrow — на завтра\n"
               "/week — текущая неделя\n"
               "/group — выбрать группу\n"
               "/subscribe — присылать расписание в выбранное время\n"
               "/settings — язык",
-        "en": "📅 Gubkin University timetable, geology faculty\n{group_line}\n\n"
+        "en": "📅 Gubkin University timetable\n{group_line}\n\n"
               "/today — today's classes\n"
               "/tomorrow — tomorrow's classes\n"
               "/week — this week\n"
               "/group — choose your group\n"
               "/subscribe — get the timetable at a time you choose\n"
               "/settings — language",
-        "fr": "📅 Emploi du temps de l'Université Gubkin, faculté de géologie\n{group_line}\n\n"
+        "fr": "📅 Emploi du temps de l'Université Gubkin\n{group_line}\n\n"
               "/today — les cours d'aujourd'hui\n"
               "/tomorrow — les cours de demain\n"
               "/week — cette semaine\n"
@@ -82,6 +82,8 @@ TEXT = {
     "btn_back": {"ru": "⬅️ Назад", "en": "⬅️ Back", "fr": "⬅️ Retour"},
     "group_current": {"ru": "👥 Группа: {code}", "en": "👥 Group: {code}", "fr": f"👥 Groupe{NBSP}: {{code}}"},
     "group_none": {"ru": "👥 Группа не выбрана", "en": "👥 No group chosen", "fr": "👥 Aucun groupe choisi"},
+    "group_choose_faculty": {"ru": "🏛 Выберите факультет:", "en": "🏛 Choose your faculty:",
+                             "fr": f"🏛 Choisissez votre faculté{NBSP}:"},
     "group_choose_year": {"ru": "👥 Выберите курс:", "en": "👥 Choose your year:",
                           "fr": f"👥 Choisissez votre année{NBSP}:"},
     "group_choose": {"ru": "👥 Выберите группу:", "en": "👥 Choose your group:",
@@ -105,14 +107,14 @@ TEXT = {
               "quelques heures, lors de la prochaine mise à jour.",
     },
     "group_unknown": {
-        "ru": "Не нашёл группу {code} на факультете геологии. Выберите из списка 👇",
-        "en": "I couldn't find group {code} in the geology faculty. Choose from the list 👇",
-        "fr": "Je n'ai pas trouvé le groupe {code} dans la faculté de géologie. Choisissez dans la liste 👇",
+        "ru": "Не нашёл группу {code}. Выберите из списка 👇",
+        "en": "I couldn't find group {code}. Choose from the list 👇",
+        "fr": "Je n'ai pas trouvé le groupe {code}. Choisissez dans la liste 👇",
     },
     "group_list_loading": {
-        "ru": "Список всех групп факультета ещё загружается — загляните через несколько часов.",
-        "en": "The full list of the faculty's groups is still loading. Please check back in a few hours.",
-        "fr": "La liste complète des groupes de la faculté est en cours de chargement. "
+        "ru": "Список всех групп ещё загружается — загляните через несколько часов.",
+        "en": "The full list of groups is still loading. Please check back in a few hours.",
+        "fr": "La liste complète des groupes est en cours de chargement. "
               "Revenez dans quelques heures.",
     },
     "groups_other": {"ru": "Другие", "en": "Other", "fr": "Autres"},
