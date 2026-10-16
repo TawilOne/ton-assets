@@ -19,6 +19,7 @@
 | Что | Команда |
 |---|---|
 | Обновить бота | `bash /opt/gubkin-bot/deploy/update.sh` |
+| Защита сервера (брандмауэр, автообновления, песочница для бота) | `bash /opt/gubkin-bot/deploy/harden.sh` |
 | Логи (выход — Ctrl+C) | `journalctl -u gubkin-bot -f` |
 | Перезапустить | `systemctl restart gubkin-bot` |
 | Сменить VPN-ключ | `rm /etc/gubkin-bot/sing-box.json` и снова команда установки |
