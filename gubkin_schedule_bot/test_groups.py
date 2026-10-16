@@ -44,7 +44,7 @@ AIVT = [{"id": "20001", "code": "АА-26-01"}, {"id": "20002", "code": "АА-26-
 GROUPS_JSON = {"faculties": [
     {"key": "geo", "id": 7, "name": "Факультет геологии и геофизики нефти и газа", "groups": GROUPS},
     {"key": "aivt", "id": 9, "name": "Факультет автоматики и вычислительной техники", "groups": AIVT}],
-    "time": time.time(), "tried": ["geo", "aivt"]}
+    "time": time.time(), "tried": ["geo", "aivt", "chem", "econ"]}
 
 
 class Msg:
@@ -460,7 +460,7 @@ def test_aivt_student(env):
     assert text.startswith("👥 <b>АА-26-01</b>") and "Программирование" in text and "Геология" not in text
     for lang in ("en", "fr"):
         t, m = bot._picker(lang)
-        assert [b for b, _ in buttons(m)] == [f[lang] for f in bot.FACULTIES]
+        assert [b for b, _ in buttons(m)] == [f[lang] for f in bot.FACULTIES if f["key"] in ("geo", "aivt")]
 
 
 def test_sync_faculty_missing_on_site(tmp_path, monkeypatch):
@@ -478,7 +478,7 @@ def test_sync_faculty_missing_on_site(tmp_path, monkeypatch):
     groups = sync.refresh_groups(interactive=False)
     assert {g["fac"] for g in groups} == {"geo"}
     log = (tmp_path / "sync.log").read_text(encoding="utf-8")
-    assert "не найден факультет «автоматик…»" in log and "Институт кибернетики" in log
+    assert "не найден факультет «автоматик + вычислительн»" in log and "Институт кибернетики" in log
 
 
 def test_sync_skips_weeks_the_site_refuses(monkeypatch):
@@ -522,7 +522,7 @@ def test_sync_retries_when_site_did_not_answer(tmp_path, monkeypatch):
     for name in ("GROUPS_FILE", "USER_GROUPS_FILE", "GROUP_FILE"):
         monkeypatch.setattr(bot, name, tmp_path / getattr(bot, name).name)
     bot.GROUPS_FILE.write_text(json.dumps({"faculties": [{"key": "geo", "groups": GROUPS[:1]}], "time": time.time(),
-                                           "tried": ["geo", "aivt"]}), encoding="utf-8")
+                                           "tried": [f["key"] for f in bot.FACULTIES]}), encoding="utf-8")
     monkeypatch.setattr(sync, "LOG", tmp_path / "sync.log")
     monkeypatch.setattr(sync, "FAILED", tmp_path / "sync_failed.json")
     monkeypatch.setattr(sync.time, "sleep", lambda s: None)
@@ -606,3 +606,41 @@ def test_start_mentions_feedback_contact(env):
     u = update(uid=12)
     run(bot.cmd_start(u, ctx()))
     assert u.effective_message.sent[0][0].endswith("✉️ Если заметили ошибку в расписании — напишите @TawiOner")
+
+
+def test_sync_finds_chemistry_and_economics_not_lookalikes(tmp_path, monkeypatch):
+    """Химия и экономика находятся по ВСЕМ словам названия; похожие названия не путаются."""
+    site = [
+        {"id": 7, "name": "Факультет геологии и геофизики нефти и газа"},
+        {"id": 3, "name": "Кафедра нефтехимической технологии"},           # «химическ» есть, но это не факультет химии
+        {"id": 4, "name": "Факультет химической технологии и экологии"},
+        {"id": 5, "name": "Факультет экономической безопасности"},          # «экономик» нет — только «экономическ»
+        {"id": 6, "name": "Факультет экономики и управления"},
+        {"id": 9, "name": "Факультет автоматики и вычислительной техники"},
+    ]
+    rows = {7: GROUPS, 9: AIVT, 3: [{"id": "1", "code": "НХ-26-01"}],
+            4: [{"id": "40001", "code": "ХТ-26-01"}, {"id": "40002", "code": "ХЭ-25-02"}],
+            5: [{"id": "2", "code": "ЭБ-26-01"}],
+            6: [{"id": "60001", "code": "ЭМ-26-01"}, {"id": "60002", "code": "ЭФ-24-03"}]}
+
+    def fake_get(self, params):
+        if params.get("method") == "getFaculties":
+            return {"state": True, "rows": site}
+        return {"state": True, "rows": [{"id": int(g["id"]), "code": g["code"]} for g in rows[params["facultyId"]]]}
+    monkeypatch.setattr(GubkinClient, "_get", fake_get)
+    monkeypatch.setattr(bot, "client", GubkinClient())
+    monkeypatch.setattr(bot, "_groups_cache", {"mtime": None, "list": []})
+    monkeypatch.setattr(bot, "GROUPS_FILE", tmp_path / "groups.json")
+    monkeypatch.setattr(sync, "LOG", tmp_path / "sync.log")
+    groups = sync.refresh_groups(interactive=False)
+    data = json.loads((tmp_path / "groups.json").read_text(encoding="utf-8"))
+    assert [(f["key"], f["id"]) for f in data["faculties"]] == [("geo", 7), ("aivt", 9), ("chem", 4), ("econ", 6)]
+    by_fac = {}
+    for g in groups:
+        by_fac.setdefault(g["fac"], []).append(g["code"])
+    assert by_fac["chem"] == ["ХТ-26-01", "ХЭ-25-02"] and by_fac["econ"] == ["ЭМ-26-01", "ЭФ-24-03"]
+    assert "НХ-26-01" not in by_fac["chem"] and "ЭБ-26-01" not in by_fac["econ"]
+    text, markup = bot._picker("ru")
+    assert [t for t, _ in buttons(markup)] == [f["ru"] for f in bot.FACULTIES]
+    text, markup = bot._picker("ru", "chem")
+    assert text.startswith("🧪 Химической технологии и экологии\n👥 Выберите курс")

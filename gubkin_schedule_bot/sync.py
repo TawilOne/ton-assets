@@ -176,7 +176,10 @@ def _fetch_faculties(interactive: bool) -> list[dict]:
     name = lambda f: str(f.get("name") or f.get("title") or "")
     out = []
     for cfg in bot.FACULTIES:
-        matches = [f for f in site if cfg["hint"] in name(f).lower()]
+        words = [cfg["hint"]] if isinstance(cfg["hint"], str) else cfg["hint"]
+        matches = [f for f in site if all(w in name(f).lower() for w in words)]
+        # «Факультет …» раньше похожих названий (институты, кафедры)
+        matches.sort(key=lambda f: not name(f).lower().startswith("факультет"))
         chosen = None
         for f in matches:
             groups = _group_rows(_with_captcha(interactive, bot.client.groups, f["id"]))
@@ -188,7 +191,7 @@ def _fetch_faculties(interactive: bool) -> list[dict]:
             f, rows, _ = _with_captcha(interactive, bot.client.find_faculty, bot.GROUP_CODE, bot.FACULTY_HINT)
             chosen = {"key": cfg["key"], "id": f["id"], "name": name(f), "groups": _group_rows(rows)}
         if chosen is None:
-            say(f"не найден факультет «{cfg['hint']}…». Факультеты на сайте: " + "; ".join(name(f) for f in site))
+            say(f"не найден факультет «{' + '.join(words)}». Факультеты на сайте: " + "; ".join(name(f) for f in site))
             continue
         out.append(chosen)
         say(f"{chosen['name']}: групп {len(chosen['groups'])}")
@@ -213,7 +216,7 @@ def refresh_groups(interactive: bool) -> list[dict]:
         except CaptchaRequired:
             raise
         except (GubkinError, OSError, ValueError, KeyError, TypeError) as e:
-            say(f"не удалось обновить список групп: {e}")  # работаем со старым списком
+            say(f"не удалось обновить список групп: {_short(e)}")  # работаем со старым списком
     return bot._faculty_groups()
 
 

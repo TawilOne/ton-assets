@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Telegram-бот расписания РГУ им. Губкина для всех групп нескольких факультетов (FACULTIES):
-геологии и геофизики, автоматики и вычислительной техники. Каждый пользователь выбирает
+геологии и геофизики, автоматики и ВТ, химической технологии и экологии, экономики и управления.
+Каждый пользователь выбирает
 факультет и группу (/group); те, кто пришёл до выбора групп, получили ГМ-26-11.
 
 Запуск:  BOT_TOKEN=123:abc python bot.py
@@ -109,13 +110,19 @@ def _fetch(start: dt.date, end: dt.date, grp: dict):
 
 # ---- факультеты, группы и выбор группы
 
-# Факультеты в боте: hint — часть названия на сайте (по ней ноутбук находит факультет), названия кнопок.
+# Факультеты в боте: hint — слова из названия факультета на сайте (должны быть ВСЕ — так «химическ»
+# не спутается с «нефтехимической»), по ним ноутбук находит факультет; дальше — названия кнопок.
 # Чтобы добавить факультет — допишите строку; ноутбук сам скачает его группы при следующем sync.
 FACULTIES = [
-    {"key": "geo", "hint": "геолог",
+    {"key": "geo", "hint": ["геолог"],
      "ru": "⛏ Геологии и геофизики", "en": "⛏ Geology & Geophysics", "fr": "⛏ Géologie et géophysique"},
-    {"key": "aivt", "hint": "автоматик",
+    {"key": "aivt", "hint": ["автоматик", "вычислительн"],
      "ru": "💻 Автоматики и ВТ", "en": "💻 Automation & Computing", "fr": "💻 Automatique et informatique"},
+    {"key": "chem", "hint": ["химическ", "технолог", "эколог"],
+     "ru": "🧪 Химической технологии и экологии", "en": "🧪 Chemical Technology & Ecology",
+     "fr": "🧪 Génie chimique et écologie"},
+    {"key": "econ", "hint": ["экономик", "управлен"],
+     "ru": "📈 Экономики и управления", "en": "📈 Economics & Management", "fr": "📈 Économie et gestion"},
 ]
 DEFAULT_FACULTY = "geo"  # факультет группы по умолчанию (GROUP_CODE)
 
@@ -1249,16 +1256,16 @@ COMMANDS = {  # меню команд Telegram (кнопка «Меню» сле
 
 # имя и описание бота для тех, у кого Telegram на английском/французском (русские — из BotFather)
 BOT_PROFILE = {
-    "en": ("Gubkin Timetable (Beta)", "Gubkin University timetable for the Geology and the Automation & "
-           "Computing faculties, with a map showing where your class is.",
-           "Gubkin University timetable for every group of the Geology and the Automation & Computing "
-           "faculties: choose your group and get "
+    "en": ("Gubkin Timetable (Beta)", "Gubkin University timetable for several faculties, with a map showing "
+           "where your class is.",
+           "Gubkin University timetable for every group of the Geology, Automation & Computing, Chemical "
+           "Technology & Ecology, and Economics & Management faculties: choose your group and get "
            "today's and tomorrow's classes, this week, and a floor map with the room of your class. "
            "The bot is in beta, so check the official timetable too."),
-    "fr": ("Emploi du temps Gubkin (bêta)", "Emploi du temps de l'Université Gubkin pour les facultés de "
-           "géologie et d'automatique et informatique, avec le plan de la salle de cours.",
-           "Emploi du temps de l'Université Gubkin pour tous les groupes des facultés de géologie et "
-           "d'automatique et informatique\u00a0: "
+    "fr": ("Emploi du temps Gubkin (bêta)", "Emploi du temps de l'Université Gubkin pour plusieurs facultés, "
+           "avec le plan de la salle de cours.",
+           "Emploi du temps de l'Université Gubkin pour tous les groupes des facultés de géologie, "
+           "d'automatique et informatique, de génie chimique et écologie, et d'économie et gestion\u00a0: "
            "choisissez votre groupe et consultez les cours d'aujourd'hui et de demain, la semaine, et un plan "
            "de l'étage avec la salle de votre cours. Le bot est en version bêta\u00a0: vérifiez aussi "
            "l'emploi du temps officiel."),
