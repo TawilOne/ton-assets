@@ -306,8 +306,9 @@ SUSPICIOUS_STOP = 5  # столько подозрительных недель 
 
 
 def _check_saved() -> guard.Vocabulary:
-    """Проверяет всё сохранённое расписание: недели с признаками подмены выбрасывает (чтобы они не ушли
-    на сервер), из остального собирает «словарь» настоящих предметов и преподавателей."""
+    """Проверяет всё сохранённое расписание и собирает «словарь» настоящих предметов и преподавателей.
+    Подозрительные недели только показывает в журнале и НЕ удаляет: если проверка ошиблась, удалённое
+    настоящее расписание пропало бы, а показывать подозрительное пользователям бот и так не станет."""
     vocab = guard.Vocabulary()
     removed = []
     for (mon, gid), (_, data) in list(bot.client._cache.items()):
@@ -318,13 +319,11 @@ def _check_saved() -> guard.Vocabulary:
         else:
             problems = guard.check_lessons(lessons)
         if problems:
-            del bot.client._cache[(mon, gid)]
             removed.append(f"{gid} {mon:%d.%m}: {problems[0]}")
         else:
             vocab.add(lessons)
     if removed:
-        bot.client._save_cache()
-        say(f"⚠️ в сохранённом расписании нашлись подозрительные недели, удалил {len(removed)}: "
+        say(f"⚠️ в сохранённом расписании подозрительные недели ({len(removed)}), бот их не покажет: "
             + "; ".join(removed[:3]))
     return vocab
 

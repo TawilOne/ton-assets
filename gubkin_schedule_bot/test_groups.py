@@ -666,10 +666,13 @@ def test_guard_catches_smeshariki_but_not_real_names():
                    notes=["Ссылка: https://zoom.us/j/1"]),
             Lesson("2026-10-16", "Пт", "12:00", "13:30", "Иностранный язык (английский)", "Тест", "Ц-11", "Нюшин В.В.")]
     assert guard.check_lessons(real) == []
+    # на сайте в поле преподавателя бывают цифры — это не подмена
+    assert guard.lesson_problems(Lesson("2026-10-14", "Ср", "08:30", "10:00", "Основы компьютерного зрения",
+                                        "Лекция", "1234", "Вакансия 2, Иванов И.И. (0,5 ст.)")) == []
     for subject, room, teacher in [("Физика", "дом Копатыча", "Петров"), ("Лекция у Кроша", "505", "Петров"),
                                    ("Физика", "505", "Совунья"), ("Физика", "505", "Кар-Карыч"),
                                    ("Смешарики", "505", "Петров"), ("Физика 🎉", "505", "Петров"),
-                                   ("Физика", "505", "Петров 3000"), ("Физика", "505", "Петров"), ]:
+                                   ("Физика", "505", "Петров"), ]:
         l = Lesson("2026-10-16", "Пт", "08:30", "10:00", subject, "Семинар", room, teacher)
         if (subject, room, teacher) == ("Физика", "505", "Петров"):
             l.notes = ["Перенесено к Нюше"]
@@ -792,7 +795,7 @@ def test_sync_rejects_plausible_but_completely_new_week(tmp_path, monkeypatch):
     assert guard.check_update(parse_week(moved, "10706"), parse_week(real, "10706"), vocab) is None
 
 
-def test_sync_removes_poisoned_weeks_already_saved(tmp_path, monkeypatch):
+def test_sync_keeps_suspicious_saved_weeks_but_reports_them(tmp_path, monkeypatch):
     def fake_get(self, params):
         gid = str(params["groupId"])
         code = next(g["code"] for g in GROUPS + AIVT if g["id"] == gid)
@@ -802,8 +805,9 @@ def test_sync_removes_poisoned_weeks_already_saved(tmp_path, monkeypatch):
     client._cache[(past, "10707")] = (time.time(), slim_week(smesh_week("10707", "ГМ-26-12")))
     client._save_cache()
     sync.run(interactive=False)
-    assert f"{past.isoformat()}|10707" not in json.loads(pushed["cache.json"])
-    assert "удалил 1" in (tmp_path / "sync.log").read_text(encoding="utf-8")
+    # не удаляем (вдруг проверка ошиблась), но бот такое не покажет
+    assert f"{past.isoformat()}|10707" in json.loads(pushed["cache.json"])
+    assert "подозрительные недели (1), бот их не покажет" in (tmp_path / "sync.log").read_text(encoding="utf-8")
 
 
 def test_sync_skips_one_poisoned_group_and_keeps_going(tmp_path, monkeypatch):
