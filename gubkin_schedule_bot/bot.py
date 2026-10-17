@@ -42,6 +42,7 @@ from telegram.error import Forbidden
 from telegram.ext import (Application, ApplicationHandlerStop, CallbackQueryHandler, CommandHandler,
                           ContextTypes, MessageHandler, TypeHandler, filters)
 
+import guard
 import i18n
 import my_commands as my
 from gubkin_api import CaptchaRequired, GubkinClient, GubkinError, normalize_code
@@ -373,6 +374,14 @@ async def _run(update: Update, start: dt.date, end: dt.date, grp: dict | None = 
         lessons, stale = await asyncio.to_thread(_fetch, start, end, grp)
         log.info("schedule %s %s..%s loaded in %.1f s%s", grp["code"], start, end, time.monotonic() - t0,
                  " (из сохранённого, сайт не ответил)" if stale else "")
+        problems = guard.check_lessons(lessons)
+        if problems:  # пришло не расписание (подмена данных) — не показываем, сообщаем об ошибке
+            log.warning("подозрительное расписание %s: %s", grp["code"], "; ".join(problems[:3]))
+            await update.effective_message.reply_text(i18n.t("data_error", lang))
+            await _alert_admin(update, key="data:" + dt.date.today().isoformat(),
+                               text=f"⚠️ В расписании группы {grp['code']} подозрительные данные, пользователям "
+                                    f"показана ошибка: {problems[0]}")
+            return None
         if stale and client.offline:
             await update.effective_message.reply_text(
                 i18n.t("stale_offline", lang, ago=_ago(client.cache_age(), lang)), disable_web_page_preview=True)
@@ -793,6 +802,9 @@ async def digest_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
             except (GubkinError, OSError) as e:  # у этой группы пока нет расписания — попробуем через полминуты
                 log.warning("digest %s: %s", grp["code"], e)
                 continue
+            if guard.check_lessons(lessons):  # подмена данных — такое не присылаем
+                log.warning("digest %s: подозрительное расписание, не отправляю", grp["code"])
+                continue
             if not lessons:  # пар нет — не беспокоим
                 texts[key] = None
             else:
@@ -832,6 +844,19 @@ async def prefetch_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 SYNC_STATUS_FILE = DATA_DIR / "sync_status.json"
+_alerted: set[str] = set()
+
+
+async def _alert_admin(update: Update, key: str, text: str) -> None:
+    """Пишет администратору — одно и то же не чаще раза (key включает дату)."""
+    admin = _admin_id()
+    if not admin or key in _alerted:
+        return
+    _alerted.add(key)
+    try:
+        await update.get_bot().send_message(admin, text)
+    except Exception as e:
+        log.warning("не удалось написать администратору: %s", e)
 
 
 async def sync_watch_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -856,6 +881,10 @@ async def sync_watch_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         msg, key = ("🔐 Сайт Губкина уже сутки просит капчу у ноутбука, расписание не обновляется. "
                     "Запустите на ноутбуке sync_now.bat и введите код с картинки."), \
             "captcha:" + dt.date.today().isoformat()
+    if not msg and str(st.get("error", "")).startswith("suspicious"):
+        msg, key = ("⚠️ Сайт Губкина отдаёт подозрительное расписание (похоже на подмену данных). Ноутбук "
+                    "не стал его сохранять, у пользователей осталось прежнее. Проверьте lk.gubkin.ru вручную."), \
+            "suspicious:" + dt.date.today().isoformat()
     age = client.cache_age()
     if not msg and age is not None and age > 48 * 3600:
         msg = (f"📅 Расписание на сервере обновлялось {_ago(age)}. Включите ноутбук с интернетом "

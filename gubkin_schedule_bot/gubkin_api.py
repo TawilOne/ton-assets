@@ -71,6 +71,9 @@ class GubkinClient:
         self._cache: dict[tuple, tuple[float, dict]] = {}
         # чем ужать ответ сайта перед сохранением в кэш (оставить только нужное) — задаёт бот
         self.slim = None
+        # проверка, что пришло настоящее расписание (validate(понедельник, id группы, новое, старое)):
+        # бросает исключение — и новая версия недели не сохраняется, остаётся прежняя
+        self.validate = None
         # кэш сохраняется на диск: если сайт не отвечает, можно показать последнее расписание
         self.cache_file = pathlib.Path(cache_file) if cache_file else None
         self._load_cache()
@@ -265,6 +268,8 @@ class GubkinClient:
             raise
         if self.slim:
             data = self.slim(data)
+        if self.validate:
+            self.validate(monday, str(group_id), data, hit[1] if hit else None)
         self._cache[key] = (time.time(), data)
         self._save_cache()
         return data

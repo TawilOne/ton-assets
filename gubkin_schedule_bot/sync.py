@@ -35,7 +35,8 @@ import requests  # noqa: E402
 
 import bot  # noqa: E402  — та же группа, cache.json и cookies.json, что у бота на ноутбуке
 from gubkin_api import CaptchaRequired, GubkinError, normalize_code, write_atomic  # noqa: E402
-from schedule import semester_bounds, slim_week  # noqa: E402
+import guard  # noqa: E402
+from schedule import parse_week, semester_bounds, slim_week  # noqa: E402
 
 DEFAULT_SERVER = "root@153.76.167.68"
 REMOTE = "/opt/gubkin-bot/gubkin_schedule_bot"
@@ -301,6 +302,50 @@ def plan(groups: list[dict], wanted: set[str], weeks: list[dt.date], this_monday
     return tasks
 
 
+SUSPICIOUS_STOP = 5  # столько подозрительных недель за запуск (и не меньше 30 % скачанных) — останавливаемся
+
+
+def _check_saved() -> guard.Vocabulary:
+    """Проверяет всё сохранённое расписание: недели с признаками подмены выбрасывает (чтобы они не ушли
+    на сервер), из остального собирает «словарь» настоящих предметов и преподавателей."""
+    vocab = guard.Vocabulary()
+    removed = []
+    for (mon, gid), (_, data) in list(bot.client._cache.items()):
+        try:
+            lessons = parse_week(data, gid)
+        except Exception:  # noqa: BLE001 — сломанная запись: тоже выбрасываем
+            lessons, problems = [], ["не читается"]
+        else:
+            problems = guard.check_lessons(lessons)
+        if problems:
+            del bot.client._cache[(mon, gid)]
+            removed.append(f"{gid} {mon:%d.%m}: {problems[0]}")
+        else:
+            vocab.add(lessons)
+    if removed:
+        bot.client._save_cache()
+        say(f"⚠️ в сохранённом расписании нашлись подозрительные недели, удалил {len(removed)}: "
+            + "; ".join(removed[:3]))
+    return vocab
+
+
+def _validator(vocab: guard.Vocabulary, stats: dict):
+    """Проверка каждой скачанной недели перед сохранением (bot.client.validate)."""
+    def validate(monday, gid, new_root, old_root):
+        new = parse_week(new_root, gid)
+        problems = guard.check_lessons(new)
+        reason = problems[0] if problems else None
+        if not reason and old_root is not None:
+            reason = guard.check_update(new, parse_week(old_root, gid), vocab)
+        if reason:
+            stats["suspicious"] += 1
+            if len(stats["examples"]) < 3:
+                stats["examples"].append(f"{gid} {monday:%d.%m}: {reason}")
+            raise guard.SuspiciousData("подозрительные данные — не сохранил, оставил прежние")
+        vocab.add(new)
+    return validate
+
+
 def compact(weeks: list[dt.date]) -> None:
     """Ужимает кэш (только нужные поля) и выбрасывает прошлые семестры — файл уходит на сервер."""
     first = weeks[0] - dt.timedelta(weeks=1)
@@ -326,6 +371,9 @@ def download(interactive: bool, srv: str) -> int:
     weeks = mondays(today)
     this_monday = today - dt.timedelta(days=today.weekday())
     groups = refresh_groups(interactive)
+    # защита от подмены: проверяем сохранённое и каждую скачанную неделю
+    stats = {"suspicious": 0, "examples": []}
+    bot.client.validate = _validator(_check_saved(), stats)
     wanted = wanted_codes(srv)
     bad_weeks = _load_failed()
     tasks = plan(groups, wanted, weeks, this_monday, others_limit=None if interactive else 60, failed=bad_weeks)
@@ -366,6 +414,14 @@ def download(interactive: bool, srv: str) -> int:
             break
         fetched += 1
         fetch(mon, g, chosen)
+        if stats["suspicious"] >= SUSPICIOUS_STOP and stats["suspicious"] * 10 >= fetched * 3:
+            if interactive:
+                print()
+            compact(weeks)
+            _save_failed(bad_weeks)
+            say("⚠️ сайт отдаёт подозрительное расписание: " + "; ".join(stats["examples"]))
+            raise guard.SuspiciousData(f"сайт отдаёт подозрительное расписание ({stats['suspicious']} недель) — "
+                                       "остановился, на сервере осталось прежнее")
         # считаем только «нет связи»; ответ сайта с ошибкой (500 на летние недели) — это связь есть
         no_link = failed.get((mon, g["code"], chosen)) in NO_LINK
         in_a_row = in_a_row + 1 if no_link else 0
@@ -383,6 +439,8 @@ def download(interactive: bool, srv: str) -> int:
                 fetch(mon, by_code[code], chosen)
     compact(weeks)
     _save_failed(bad_weeks)
+    if stats["suspicious"]:
+        say("⚠️ подозрительные недели (не сохранены): " + "; ".join(stats["examples"]))
     if failed:
         by_error: dict[str, list[str]] = {}
         for (mon, code, _), e in failed.items():
@@ -439,6 +497,9 @@ def _run(interactive: bool) -> int:
     except CaptchaRequired:
         status["error"] = "captcha"
         say("сайт просит капчу — запустите sync_now.bat")
+    except guard.SuspiciousData as e:
+        status["error"] = "suspicious: " + str(e)[:250]
+        say(f"не удалось скачать: {e}")
     except Exception as e:  # нет интернета, сайт лежит и т.п. — попробуем в следующий раз
         status["error"] = str(e)[:300]
         say(f"не удалось скачать: {e}")

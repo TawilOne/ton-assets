@@ -644,3 +644,177 @@ def test_sync_finds_chemistry_and_economics_not_lookalikes(tmp_path, monkeypatch
     assert [t for t, _ in buttons(markup)] == [f["ru"] for f in bot.FACULTIES]
     text, markup = bot._picker("ru", "chem")
     assert text.startswith("🧪 Химической технологии и экологии\n👥 Выберите курс")
+
+
+# ---- защита от подмены расписания («Смешарики»)
+
+def smesh_week(gid, code):
+    """Неделя, где вместо настоящих пар — Смешарики (так однажды подменили данные другому сервису)."""
+    w = week_for(gid, code, "Как подружиться с Крошем")
+    lo = w["rows"]["organizations"][0]["lessons"][0]
+    lo["rooms"] = [{"number": "Дом Копатыча"}]
+    lo["teachers"] = [{"lastName": "Совунья"}]
+    return w
+
+
+def test_guard_catches_smeshariki_but_not_real_names():
+    import guard
+    from schedule import Lesson
+    real = [Lesson("2026-10-16", "Пт", "08:30", "10:00", "Физика", "Семинар", "1715", "Ежиков Иван Петрович"),
+            Lesson("2026-10-16", "Пт", "10:15", "11:45", "Мультимедиа-технологии", "Лабораторная работа",
+                   "ДОТ https://online.gubkin.ru", "Барашков А. А., Пинский Б. Б., Smith John",
+                   notes=["Ссылка: https://zoom.us/j/1"]),
+            Lesson("2026-10-16", "Пт", "12:00", "13:30", "Иностранный язык (английский)", "Тест", "Ц-11", "Нюшин В.В.")]
+    assert guard.check_lessons(real) == []
+    for subject, room, teacher in [("Физика", "дом Копатыча", "Петров"), ("Лекция у Кроша", "505", "Петров"),
+                                   ("Физика", "505", "Совунья"), ("Физика", "505", "Кар-Карыч"),
+                                   ("Смешарики", "505", "Петров"), ("Физика 🎉", "505", "Петров"),
+                                   ("Физика", "505", "Петров 3000"), ("Физика", "505", "Петров"), ]:
+        l = Lesson("2026-10-16", "Пт", "08:30", "10:00", subject, "Семинар", room, teacher)
+        if (subject, room, teacher) == ("Физика", "505", "Петров"):
+            l.notes = ["Перенесено к Нюше"]
+        assert guard.lesson_problems(l), (subject, room, teacher)
+    assert guard.lesson_problems(Lesson("2026-10-16", "Пт", "25:00", "26:00", "Физика", "", "", ""))
+
+
+def test_bot_shows_error_instead_of_smeshariki(env, monkeypatch):
+    cache = json.loads((env / "cache.json").read_text(encoding="utf-8"))
+    cache[f"{MONDAY.isoformat()}|10707"] = [time.time(), slim_week(smesh_week("10707", "ГМ-26-12"))]
+    (env / "cache.json").write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
+    sent_admin = []
+
+    async def send_message(chat, text, **kw):
+        sent_admin.append((chat, text))
+    monkeypatch.setattr(bot, "_admin_id", lambda: 99)
+    monkeypatch.setattr(bot, "_alerted", set())
+    bot._set_user_group(5, "ГМ-26-12")
+    u = update(uid=5)
+    u.get_bot = lambda: Obj(send_message=send_message)
+    run(bot.cmd_today(u, ctx()))
+    texts = [t for t, _ in u.effective_message.sent]
+    assert any("Произошла ошибка" in t for t in texts)
+    assert not any("Копатыч" in t or "Совунья" in t or "Крош" in t for t in texts)
+    assert sent_admin and "ГМ-26-12" in sent_admin[0][1]
+    u2 = update(uid=5)  # «Где пара» — тоже ошибка, без карты со Смешариками
+    u2.get_bot = lambda: Obj(send_message=send_message)
+    run(bot.cmd_map(u2, ctx()))
+    assert "Произошла ошибка" in u2.effective_message.sent[0][0] and len(u2.effective_message.sent) == 1
+    bot._set_user_group(6, "ГМ-26-11")  # у других групп всё по-прежнему
+    u3 = update(uid=6)
+    run(bot.cmd_today(u3, ctx()))
+    assert "Геология" in u3.effective_message.sent[-1][0]
+
+
+def _sync_env(tmp_path, monkeypatch, fake_get):
+    monkeypatch.setattr(GubkinClient, "_get", fake_get)
+    client = GubkinClient(cache_file=str(tmp_path / "cache.json"))
+    client.slim = slim_week
+    monkeypatch.setattr(bot, "client", client)
+    monkeypatch.setattr(bot, "_group", {"id": "10706", "code": bot.GROUP_CODE, "faculty": ""})
+    monkeypatch.setattr(bot, "_groups_cache", {"mtime": None, "list": []})
+    for name in ("GROUPS_FILE", "USER_GROUPS_FILE", "GROUP_FILE"):
+        monkeypatch.setattr(bot, name, tmp_path / getattr(bot, name).name)
+    bot.GROUPS_FILE.write_text(json.dumps(GROUPS_JSON, ensure_ascii=False), encoding="utf-8")
+    for name, f in (("LOG", "sync.log"), ("FAILED", "sync_failed.json"), ("STATUS", "sync_status.json"),
+                    ("LOCK", "sync.lock")):
+        monkeypatch.setattr(sync, name, tmp_path / f)
+    monkeypatch.setattr(sync.time, "sleep", lambda s: None)
+    monkeypatch.setattr(sync, "server", lambda: "root@test")
+    pushed = {}
+    monkeypatch.setattr(sync, "put", lambda srv, name, data: pushed.__setitem__(name, data))
+
+    class R:
+        returncode = 0
+        stdout = json.dumps({"1": "ГМ-26-11"}, ensure_ascii=False).encode()
+    monkeypatch.setattr(sync, "ssh", lambda *a, **kw: R())
+    return client, pushed
+
+
+def test_sync_keeps_old_week_when_site_sends_smeshariki(tmp_path, monkeypatch):
+    """Сайт подсунул Смешариков одной группе — эта неделя не сохраняется, остаётся прежняя."""
+    def fake_get(self, params):
+        gid = str(params["groupId"])
+        code = next(g["code"] for g in GROUPS + AIVT if g["id"] == gid)
+        if gid == "10706":
+            return smesh_week(gid, code)
+        return week_for(gid, code, "Предмет " + code)
+    client, pushed = _sync_env(tmp_path, monkeypatch, fake_get)
+    old = slim_week(week_for("10706", "ГМ-26-11", "Геология"))
+    client._cache[(MONDAY, "10706")] = (time.time() - 5 * 3600, old)
+    assert sync.run(interactive=False) == 1  # текущая неделя выбранной группы не обновилась — это ошибка
+    cache = json.loads(pushed["cache.json"])
+    assert cache[f"{MONDAY.isoformat()}|10706"][1] == old  # прежние настоящие пары на месте
+    assert "Копатыч" not in pushed["cache.json"].decode() and "Совунья" not in pushed["cache.json"].decode()
+    assert "подозрительн" in (tmp_path / "sync.log").read_text(encoding="utf-8")
+
+
+def test_sync_stops_when_site_sends_smeshariki_everywhere(tmp_path, monkeypatch):
+    def fake_get(self, params):
+        gid = str(params["groupId"])
+        return smesh_week(gid, "X")
+    client, pushed = _sync_env(tmp_path, monkeypatch, fake_get)
+    calls = []
+    real_week = GubkinClient.week
+
+    def counting_week(self, day, gid):
+        calls.append(gid)
+        return real_week(self, day, gid)
+    monkeypatch.setattr(GubkinClient, "week", counting_week)
+    assert sync.run(interactive=False) == 1
+    status = json.loads(pushed["sync_status.json"])
+    assert status["error"].startswith("suspicious") and len(calls) < 15  # остановился, не перебирая всё
+    assert "Копатыч" not in pushed.get("cache.json", b"").decode()
+
+
+def test_sync_rejects_plausible_but_completely_new_week(tmp_path, monkeypatch):
+    """Подмена «правдоподобными» парами: вся неделя вдруг с незнакомыми предметами и преподавателями."""
+    import guard
+    from schedule import parse_week
+    vocab = guard.Vocabulary()
+    real = week_for("10706", "ГМ-26-11", "Геология")
+    lessons = real["rows"]["organizations"][0]["lessons"]
+    for i, name in enumerate(["Физика", "Химия"]):
+        lo = copy.deepcopy(lessons[0])
+        lo["timeChunks"] = [0]
+        lo["weekDayNumber"] = i + 1
+        lo["course"] = {"name": name}
+        lessons.append(lo)
+    vocab.add(parse_week(real, "10706"))
+    fake = copy.deepcopy(real)
+    for i, lo in enumerate(fake["rows"]["organizations"][0]["lessons"]):
+        lo["course"] = {"name": f"Таинственный курс {i}"}
+        lo["teachers"] = [{"lastName": f"Незнакомцев{'аб'[i % 2]}", "firstName": "Икс"}]
+    reason = guard.check_update(parse_week(fake, "10706"), parse_week(real, "10706"), vocab)
+    assert reason and "3 из 3" in reason
+    # обычный перенос одной пары — не подмена
+    moved = copy.deepcopy(real)
+    moved["rows"]["organizations"][0]["lessons"][0]["course"] = {"name": "Новый факультатив"}
+    assert guard.check_update(parse_week(moved, "10706"), parse_week(real, "10706"), vocab) is None
+
+
+def test_sync_removes_poisoned_weeks_already_saved(tmp_path, monkeypatch):
+    def fake_get(self, params):
+        gid = str(params["groupId"])
+        code = next(g["code"] for g in GROUPS + AIVT if g["id"] == gid)
+        return week_for(gid, code, "Предмет " + code)
+    client, pushed = _sync_env(tmp_path, monkeypatch, fake_get)
+    past = MONDAY - dt.timedelta(weeks=3)
+    client._cache[(past, "10707")] = (time.time(), slim_week(smesh_week("10707", "ГМ-26-12")))
+    client._save_cache()
+    sync.run(interactive=False)
+    assert f"{past.isoformat()}|10707" not in json.loads(pushed["cache.json"])
+    assert "удалил 1" in (tmp_path / "sync.log").read_text(encoding="utf-8")
+
+
+def test_sync_skips_one_poisoned_group_and_keeps_going(tmp_path, monkeypatch):
+    def fake_get(self, params):
+        gid = str(params["groupId"])
+        code = next(g["code"] for g in GROUPS + AIVT if g["id"] == gid)
+        return smesh_week(gid, code) if gid == "10600" else week_for(gid, code, "Предмет " + code)
+    client, pushed = _sync_env(tmp_path, monkeypatch, fake_get)
+    assert sync.run(interactive=False) == 0  # выбранная группа (ГМ-26-11) скачалась — всё хорошо
+    cache = json.loads(pushed["cache.json"])
+    assert not [k for k in cache if k.endswith("|10600")]  # Смешарики не сохранены
+    assert [k for k in cache if k.endswith("|20001")]      # остальные группы — на месте
+    log = (tmp_path / "sync.log").read_text(encoding="utf-8")
+    assert "подозрительные недели (не сохранены): 10600" in log

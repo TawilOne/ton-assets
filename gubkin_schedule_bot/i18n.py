@@ -169,6 +169,14 @@ TEXT = {
         "en": "The website is asking for a captcha. Send /captcha and type the code from the picture.",
         "fr": "Le site demande un captcha. Envoyez /captcha et saisissez le code de l'image.",
     },
+    "data_error": {
+        "ru": "⚠️ Произошла ошибка: расписание с сайта выглядит неправильно, поэтому я его не показываю. "
+              "Посмотрите расписание на lk.gubkin.ru/schedule — я уже разбираюсь.",
+        "en": "⚠️ An error occurred: the timetable from the website looks wrong, so I'm not showing it. "
+              "Please check lk.gubkin.ru/schedule. I'm already looking into it.",
+        "fr": "⚠️ Une erreur s'est produite : l'emploi du temps reçu du site semble incorrect, je ne l'affiche donc "
+              "pas. Consultez lk.gubkin.ru/schedule. Je m'en occupe déjà.",
+    },
     "site_busy": {
         "ru": "⏳ Сайт Губкина временно ограничил запросы. Попробуйте через несколько минут.",
         "en": "⏳ The Gubkin University website is temporarily limiting requests. Please try again in a few minutes.",
