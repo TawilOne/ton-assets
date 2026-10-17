@@ -574,12 +574,15 @@ def test_only_one_sync_at_a_time(tmp_path, monkeypatch):
     ran = []
     monkeypatch.setattr(sync, "_run", lambda interactive: ran.append(1) or 0)
     assert sync.run(True) == 0 and not sync.LOCK.exists()  # замок снят после работы
-    sync.LOCK.write_text("123")  # другая копия ещё работает
+    sync.LOCK.write_text(str(os.getppid()))  # другая копия ещё работает (её процесс жив)
     assert sync.run(True) == 1 and ran == [1]
+    sync.LOCK.write_text("999999999")  # окно закрыли крестиком: замок остался, а программы уже нет
+    assert sync.run(True) == 0 and ran == [1, 1]
+    sync.LOCK.write_text(str(os.getppid()))
     assert "уже работает в другом окне" in (tmp_path / "sync.log").read_text(encoding="utf-8")
     old = time.time() - 3600
-    os.utime(sync.LOCK, (old, old))  # брошенный замок (окно закрыли крестиком)
-    assert sync.run(True) == 0 and ran == [1, 1]
+    os.utime(sync.LOCK, (old, old))  # замок старше 40 минут — тоже брошенный
+    assert sync.run(True) == 0 and ran == [1, 1, 1]
 
 
 def test_captcha_new_picture_each_try_and_keyboard_layout(tmp_path, monkeypatch):

@@ -455,12 +455,45 @@ def download(interactive: bool, srv: str) -> int:
 LOCK = HERE / "sync.lock"
 
 
+def _pid_alive(pid: int) -> bool:
+    """Работает ли ещё программа с этим номером процесса (окно могли закрыть крестиком)."""
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        try:
+            import ctypes
+            from ctypes import wintypes
+            k = ctypes.WinDLL("kernel32", use_last_error=True)
+            k.OpenProcess.restype = wintypes.HANDLE
+            k.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+            h = k.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+            if not h:
+                return ctypes.get_last_error() == 5  # нет доступа — процесс есть, но чужой; иначе его нет
+            code = wintypes.DWORD()
+            ok = k.GetExitCodeProcess(h, ctypes.byref(code))
+            k.CloseHandle(h)
+            return not ok or code.value == 259  # STILL_ACTIVE
+        except Exception:  # noqa: BLE001 — не смогли проверить: считаем живым, сработает правило 40 минут
+            return True
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
 def _take_lock() -> bool:
     """Только одна копия sync за раз: две копии мешают друг другу (каждая получает свою капчу,
-    и коды не подходят). Замок старше 40 минут считаем брошенным (sync не живёт дольше)."""
+    и коды не подходят). Замок брошен, если программы, которая его поставила, уже нет (окно закрыли
+    крестиком) или ему больше 40 минут (sync не живёт дольше)."""
     try:
         if LOCK.exists() and time.time() - LOCK.stat().st_mtime < 40 * 60:
-            return False
+            try:
+                pid = int(LOCK.read_text(encoding="utf-8").strip() or 0)
+            except ValueError:
+                pid = 0
+            if _pid_alive(pid):
+                return False
         LOCK.write_text(str(os.getpid()), encoding="utf-8")
         return True
     except OSError:
