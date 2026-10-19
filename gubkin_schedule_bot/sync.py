@@ -5,7 +5,8 @@
   2) все остальные группы факультетов — одна неделя (пн–чт текущая, пт–вс следующая), раз в сутки
      (чтобы новичок сразу увидел расписание своей группы);
   3) выбранные группы — остальные недели семестра: будущие раз в 3 дня, прошедшие — если их нет.
-За один запуск — не дольше 11 минут (вручную — 25): что не успели, докачается в следующий раз.
+По расписанию — не дольше 11 минут за запуск (что не успели, докачается в следующий раз);
+вручную (sync_now.bat) — без ограничения по времени, пока не скачает весь план.
 
 Сайт Губкина не пускает серверы хостингов, а домашний интернет пускает. Поэтому расписание
 скачивает ноутбук, а бот на сервере (GUBKIN_OFFLINE=1) отвечает по присланному файлу.
@@ -385,7 +386,9 @@ def download(interactive: bool, srv: str) -> int:
                  today=today)
     say(f"групп: {len(groups)}, выбраны пользователями: {len(wanted & {g['code'] for g in groups})}, "
         f"запросов в плане: {len(tasks)}")
-    deadline = time.monotonic() + (25 if interactive else 11) * 60  # задача Windows живёт не дольше 15 минут
+    # по расписанию задача Windows живёт не дольше 15 минут; вручную — качаем, сколько нужно
+    deadline = None if interactive else time.monotonic() + 11 * 60
+    sent_at = time.monotonic()  # когда последний раз отправили расписание на сервер
     failed: dict[tuple, str] = {}
     fetched = 0
     def fetch(mon, g, chosen) -> None:
@@ -409,7 +412,7 @@ def download(interactive: bool, srv: str) -> int:
 
     in_a_row = 0  # неудач подряд
     for i, (mon, g, chosen) in enumerate(tasks, 1):
-        if time.monotonic() > deadline:
+        if deadline is not None and time.monotonic() > deadline:
             say(f"время вышло, осталось запросов: {len(tasks) - i + 1} — докачаю в следующий раз")
             break
         if in_a_row >= STOP_AFTER:
@@ -418,6 +421,14 @@ def download(interactive: bool, srv: str) -> int:
             say(f"{STOP_AFTER} запросов подряд не прошли — похоже, нет связи с сайтом. Остановился, "
                 "попробую в следующий раз")
             break
+        _touch_lock()  # долгий запуск: замок свежий, чтобы второй sync не решил, что он брошен
+        if interactive and time.monotonic() - sent_at > SEND_EVERY:
+            # долгий ручной запуск: отдаём боту уже скачанное, не дожидаясь конца
+            sent_at = time.monotonic()
+            try:
+                put(srv, "cache.json", bot.client.cache_file.read_bytes())
+            except Exception as e:  # noqa: BLE001 — не вышло сейчас, отправим в конце
+                print(f"\n  (не удалось отправить промежуточно: {_short(e)})")
         fetched += 1
         fetch(mon, g, chosen)
         if stats["suspicious"] >= SUSPICIOUS_STOP and stats["suspicious"] * 10 >= fetched * 3:
@@ -437,7 +448,7 @@ def download(interactive: bool, srv: str) -> int:
         print()
     # сайт иногда не отвечает на первые запросы (перед капчей) — выбранным группам даём второй шанс
     again = [k for k, e in failed.items() if e == "сайт не ответил" and k[2]]
-    if again and time.monotonic() < deadline + 60:
+    if again and (deadline is None or time.monotonic() < deadline + 60):
         time.sleep(5)
         by_code = {g["code"]: g for g in groups}
         for mon, code, chosen in again:
@@ -460,6 +471,14 @@ def download(interactive: bool, srv: str) -> int:
 
 
 LOCK = HERE / "sync.lock"
+SEND_EVERY = 10 * 60  # долгий ручной запуск отправляет скачанное на сервер раз в 10 минут
+
+
+def _touch_lock() -> None:
+    try:
+        os.utime(LOCK)
+    except OSError:
+        pass
 
 
 def _pid_alive(pid: int) -> bool:
@@ -492,7 +511,7 @@ def _pid_alive(pid: int) -> bool:
 def _take_lock() -> bool:
     """Только одна копия sync за раз: две копии мешают друг другу (каждая получает свою капчу,
     и коды не подходят). Замок брошен, если программы, которая его поставила, уже нет (окно закрыли
-    крестиком) или ему больше 40 минут (sync не живёт дольше)."""
+    крестиком) или он не обновлялся 40 минут (работающий sync обновляет его перед каждым запросом)."""
     try:
         if LOCK.exists() and time.time() - LOCK.stat().st_mtime < 40 * 60:
             try:
@@ -516,7 +535,8 @@ def run(interactive: bool) -> int:
         return _run(interactive)
     finally:
         try:
-            LOCK.unlink()
+            if LOCK.read_text(encoding="utf-8").strip() == str(os.getpid()):  # снимаем только свой замок
+                LOCK.unlink()
         except OSError:
             pass
 

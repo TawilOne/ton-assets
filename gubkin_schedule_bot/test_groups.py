@@ -845,3 +845,80 @@ def test_sync_skips_one_poisoned_group_and_keeps_going(tmp_path, monkeypatch):
     assert [k for k in cache if k.endswith("|20001")]      # остальные группы — на месте
     log = (tmp_path / "sync.log").read_text(encoding="utf-8")
     assert "подозрительные недели (не сохранены): 10600" in log
+
+
+def test_manual_sync_has_no_time_limit_scheduled_has(tmp_path, monkeypatch):
+    """Вручную (sync_now) качаем весь план, сколько бы ни шло; по ходу отдаём скачанное боту и держим
+    замок свежим. По расписанию — стоп через 11 минут (задача Windows живёт не дольше 15)."""
+    clock = [0.0]
+    monkeypatch.setattr(sync.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(sync.time, "sleep", lambda s: None)
+
+    def fake_get(self, params):
+        clock[0] += 60  # сайт медленный: минута на каждую неделю
+        if params.get("method") == "getFaculties":
+            return {"state": True, "rows": [{"id": 7, "name": "Факультет геологии и геофизики нефти и газа"}]}
+        if params.get("method") == "getFacultyGroups":
+            return {"state": True, "rows": [{"id": int(g["id"]), "code": g["code"]} for g in GROUPS]}
+        gid = str(params["groupId"])
+        code = next(g["code"] for g in GROUPS if g["id"] == gid)
+        return week_for(gid, code, "Предмет " + code)
+
+    monkeypatch.setattr(GubkinClient, "_get", fake_get)
+
+    def setup(sub):
+        d = tmp_path / sub
+        d.mkdir()
+        client = GubkinClient(cache_file=str(d / "cache.json"), cookie_file=str(d / "cookies.json"))
+        client.slim = slim_week
+        monkeypatch.setattr(bot, "client", client)
+        monkeypatch.setattr(bot, "_group", {"id": None, "code": bot.GROUP_CODE, "faculty": ""})
+        monkeypatch.setattr(bot, "_groups_cache", {"mtime": None, "list": []})
+        for name in ("GROUPS_FILE", "USER_GROUPS_FILE", "GROUP_FILE"):
+            monkeypatch.setattr(bot, name, d / getattr(bot, name).name)
+        monkeypatch.setattr(sync, "STATUS", d / "sync_status.json")
+        monkeypatch.setattr(sync, "LOG", d / "sync.log")
+        monkeypatch.setattr(sync, "FAILED", d / "sync_failed.json")
+        monkeypatch.setattr(sync, "LOCK", d / "sync.lock")
+        return d
+
+    monkeypatch.setattr(sync, "server", lambda: "root@test")
+    puts = []
+    monkeypatch.setattr(sync, "put", lambda srv, name, data: puts.append((clock[0], name)))
+    touched = []
+    real_touch = sync._touch_lock
+    monkeypatch.setattr(sync, "_touch_lock", lambda: touched.append(sync.LOCK.exists()) or real_touch())
+
+    class R:
+        returncode = 0
+        stdout = json.dumps({"1": "ГМ-26-11", "2": "ГМ-26-12"}, ensure_ascii=False).encode()
+    monkeypatch.setattr(sync, "ssh", lambda *a, **kw: R())
+
+    weeks = sync.mondays(dt.date.today())
+    setup("manual")
+    assert sync.run(interactive=True) == 0
+    assert clock[0] > 25 * 60  # шло дольше прежних 25 минут — и не оборвалось
+    cache = json.loads((tmp_path / "manual" / "cache.json").read_text(encoding="utf-8"))
+    assert len([k for k in cache if k.split("|")[1] in ("10706", "10707")]) == 2 * len(weeks)  # всё скачано
+    mid = [t for t, name in puts if name == "cache.json"][:-1]
+    assert mid and all(b - a >= sync.SEND_EVERY for a, b in zip(mid, mid[1:]))  # промежуточно — раз в 10 минут
+    assert touched and all(touched)  # замок обновлялся, пока он был
+    assert "время вышло" not in (tmp_path / "manual" / "sync.log").read_text(encoding="utf-8")
+
+    clock[0] = 0.0
+    puts.clear()
+    setup("scheduled")
+    sync.run(interactive=False)
+    assert "время вышло" in (tmp_path / "scheduled" / "sync.log").read_text(encoding="utf-8")
+    assert "обновлено недель: 12" in (tmp_path / "scheduled" / "sync.log").read_text(encoding="utf-8")  # 11 мин + 1
+    assert [name for _, name in puts].count("cache.json") == 1  # по расписанию — только в конце
+
+
+def test_sync_does_not_remove_someone_elses_lock(tmp_path, monkeypatch):
+    """Ручной sync ждёт капчу дольше 40 минут, по расписанию стартовал второй: закончив, второй не
+    должен снять замок первого."""
+    monkeypatch.setattr(sync, "LOCK", tmp_path / "sync.lock")
+    monkeypatch.setattr(sync, "LOG", tmp_path / "sync.log")
+    monkeypatch.setattr(sync, "_run", lambda interactive: sync.LOCK.write_text("12345") and 0)
+    assert sync.run(False) == 0
+    assert sync.LOCK.read_text() == "12345"
