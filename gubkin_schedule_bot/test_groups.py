@@ -659,10 +659,15 @@ def test_sync_finds_chemistry_and_economics_not_lookalikes(tmp_path, monkeypatch
         {"id": 11, "name": "Кафедра сооружения и ремонта трубопроводов"},    # «трубопровод» есть, но это кафедра
         {"id": 12, "name": "Факультет разработки нефтяных и газовых месторождений"},
         {"id": 13, "name": "Факультет проектирования, сооружения и эксплуатации систем трубопроводного транспорта"},
+        {"id": 14, "name": "Кафедра инженерной графики"},                   # «инженерн» есть, «механик» нет
+        {"id": 15, "name": "Факультет инженерной механики"},
+        {"id": 16, "name": "Факультет комплексной безопасности топливно-энергетического комплекса"},
     ]
     rows = {7: GROUPS, 9: AIVT, 3: [{"id": "1", "code": "НХ-26-01"}],
             11: [{"id": "3", "code": "ТР-26-99"}],
             12: [{"id": "120001", "code": "РН-26-01"}], 13: [{"id": "130001", "code": "ТТ-26-01"}],
+            14: [{"id": "4", "code": "ИГ-26-99"}],
+            15: [{"id": "150001", "code": "МБ-26-01"}], 16: [{"id": "160001", "code": "БТ-26-01"}],
             4: [{"id": "40001", "code": "ХТ-26-01"}, {"id": "40002", "code": "ХЭ-25-02"}],
             5: [{"id": "2", "code": "ЭБ-26-01"}],
             6: [{"id": "60001", "code": "ЭМ-26-01"}, {"id": "60002", "code": "ЭФ-24-03"}]}
@@ -679,13 +684,14 @@ def test_sync_finds_chemistry_and_economics_not_lookalikes(tmp_path, monkeypatch
     groups = sync.refresh_groups(interactive=False)
     data = json.loads((tmp_path / "groups.json").read_text(encoding="utf-8"))
     assert [(f["key"], f["id"]) for f in data["faculties"]] == [("geo", 7), ("aivt", 9), ("chem", 4), ("econ", 6),
-                                                                 ("oil", 12), ("pipe", 13)]
+                                                                 ("oil", 12), ("pipe", 13), ("mech", 15), ("safety", 16)]
     by_fac = {}
     for g in groups:
         by_fac.setdefault(g["fac"], []).append(g["code"])
     assert by_fac["chem"] == ["ХТ-26-01", "ХЭ-25-02"] and by_fac["econ"] == ["ЭМ-26-01", "ЭФ-24-03"]
     assert "НХ-26-01" not in by_fac["chem"] and "ЭБ-26-01" not in by_fac["econ"]
     assert by_fac["oil"] == ["РН-26-01"] and by_fac["pipe"] == ["ТТ-26-01"]
+    assert by_fac["mech"] == ["МБ-26-01"] and by_fac["safety"] == ["БТ-26-01"]
     text, markup = bot._picker("ru")
     assert [t for t, _ in buttons(markup)] == [f["ru"] for f in bot.FACULTIES]
     text, markup = bot._picker("ru", "chem")
