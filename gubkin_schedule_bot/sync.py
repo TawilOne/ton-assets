@@ -26,6 +26,7 @@ import os
 import pathlib
 import subprocess
 import sys
+import tempfile
 import time
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -115,17 +116,35 @@ def captcha_text(typed: str) -> str:
     return "".join(typed.split()).translate(_EN_TO_RU)
 
 
+def _save_captcha(data: bytes, attempt: int) -> pathlib.Path:
+    """Сохраняет картинку капчи и возвращает путь. Если в папку с ботом записать не вышло
+    (файл занят просмотрщиком, мешает антивирус — Windows отвечает [Errno 22]), берём временную
+    папку. Показ капчи — удобство, он не должен ронять загрузку расписания."""
+    name = "captcha.png" if attempt == 0 else f"captcha{attempt + 1}.png"
+    for folder in (HERE, pathlib.Path(tempfile.gettempdir())):
+        pic = folder / name
+        try:
+            pic.write_bytes(data)
+            return pic
+        except OSError:
+            continue
+    # не удалось нигде — покажем капчу текстом в base64, лишь бы не потерять запуск
+    raise CaptchaRequired("не удалось сохранить картинку капчи")
+
+
 def solve_captcha() -> None:
     """Показывает капчу и просит ввести код. После неверного кода сайт меняет капчу —
     поэтому каждая попытка с новой картинкой."""
     for attempt in range(3):
         # у каждой попытки свой файл: просмотрщик Windows может показывать старую картинку из того же файла
-        pic = HERE / ("captcha.png" if attempt == 0 else f"captcha{attempt + 1}.png")
-        pic.write_bytes(bot.client.captcha_image())
-        if os.name == "nt":
-            os.startfile(pic)  # откроется в просмотрщике картинок
-        else:
-            print(f"Картинка: {pic}")
+        pic = _save_captcha(bot.client.captcha_image(), attempt)
+        try:
+            if os.name == "nt":
+                os.startfile(str(pic))  # откроется в просмотрщике картинок
+            else:
+                print(f"Картинка: {pic}")
+        except OSError:  # не открылся просмотрщик — покажем путь, картинку откроют вручную
+            print(f"Откройте картинку капчи: {pic}")
         code = captcha_text(input("Введите символы с картинки (русские буквы и цифры): "))
         if bot.client.validate_captcha(code):
             print("✅ Капча принята")

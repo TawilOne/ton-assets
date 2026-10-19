@@ -619,6 +619,28 @@ def test_captcha_new_picture_each_try_and_keyboard_layout(tmp_path, monkeypatch)
     assert len(shown) == 2 and checked == ["неверно", "цэмэдк"]
 
 
+def test_captcha_survives_unwritable_folder_and_viewer_error(tmp_path, monkeypatch):
+    """Windows иногда не даёт записать/открыть картинку ([Errno 22]). Это не должно ронять загрузку:
+    пишем во временную папку, а если просмотрщик не открылся — просто показываем путь."""
+    class C:
+        def captcha_image(self):
+            return b"png"
+
+        def validate_captcha(self, code):
+            return True
+    monkeypatch.setattr(bot, "client", C())
+
+    locked = tmp_path / "locked"  # папка с ботом не существует — запись в неё не удастся ([Errno 22]/no dir)
+    monkeypatch.setattr(sync, "HERE", locked)
+    tmpdir = tmp_path / "tmp"
+    tmpdir.mkdir()
+    monkeypatch.setattr(sync.tempfile, "gettempdir", lambda: str(tmpdir))
+    monkeypatch.setattr(sync.os, "name", "posix")
+    monkeypatch.setattr("builtins.input", lambda prompt="": "код")
+    sync.solve_captcha()  # не падает
+    assert (tmpdir / "captcha.png").read_bytes() == b"png"  # ушло во временную папку
+
+
 def test_start_mentions_feedback_contact(env):
     u = update(uid=12)
     run(bot.cmd_start(u, ctx()))
