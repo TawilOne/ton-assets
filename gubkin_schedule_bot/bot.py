@@ -1220,21 +1220,57 @@ async def cmd_users(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                                                                  web_app=WebAppInfo(url))]]))
 
 
-def _admin_payload(users: dict) -> str:
+ADMIN_PAYLOAD_MAX = 6000  # GitHub Pages не открывает слишком длинные адреса («URI Too Long»)
+
+
+def _admin_payload(users: dict, limit: int = ADMIN_PAYLOAD_MAX) -> str:
     """Данные для admin.html: сжатый JSON (deflate + base64url) в параметре «p» адреса.
-    В «#» класть нельзя: Telegram дописывает туда свои параметры."""
+    В «#» класть нельзя: Telegram дописывает туда свои параметры. Итоги (графики, счётчики) считаем
+    здесь по всем пользователям, а в список кладём столько самых недавних, сколько влезает в limit."""
     import base64
     import zlib
     subs, groups = _load_subs(), _load_user_groups()
+    now = dt.datetime.now(MSK)
+    today = now.strftime("%Y-%m-%d")
+    days = [(now - dt.timedelta(days=i)).strftime("%Y-%m-%d") for i in range(13, -1, -1)]
+    per_day = {k: [0, 0] for k in days}  # день → [клики, людей]
+    acts: dict[str, int] = {}
+    for u in users.values():
+        for k, n in (u.get("days") or {}).items():
+            if k in per_day:
+                per_day[k][0] += n
+                per_day[k][1] += 1
+        for a, n in (u.get("acts") or {}).items():
+            acts[a] = acts.get(a, 0) + n
+    totals = {"users": len(users), "blocked": sum(1 for u in users.values() if u.get("blocked")),
+              "today": sum(1 for u in users.values() if u.get("last", "").startswith(today)),
+              "a7": sum(1 for u in users.values() if u.get("last", "") >= days[7]),
+              "new7": sum(1 for u in users.values() if u.get("first", "") >= days[7]),
+              "acts": acts, "days": per_day}
     rows = []
     for uid, u in sorted(users.items(), key=lambda kv: kv[1].get("last", ""), reverse=True)[:300]:
         rows.append([u.get("name") or "", u.get("username") or "", u.get("count", 0), u.get("first", ""),
                      u.get("last", ""), i18n.get_lang(uid), (subs.get(uid) or {}).get("time", ""),
-                     u.get("acts") or {}, u.get("days") or {}, groups.get(uid, ""), u.get("blocked") or ""])
-    data = json.dumps({"now": dt.datetime.now(MSK).strftime("%Y-%m-%d %H:%M"), "u": rows},
-                      ensure_ascii=False, separators=(",", ":")).encode()
-    z = zlib.compressobj(9, zlib.DEFLATED, -15)  # «сырой» deflate — его умеет распаковать браузер
-    return base64.urlsafe_b64encode(z.compress(data) + z.flush()).decode().rstrip("=")
+                     0, 0, groups.get(uid, ""), u.get("blocked") or ""])
+
+    def pack(n: int) -> str:
+        data = json.dumps({"now": now.strftime("%Y-%m-%d %H:%M"), "t": totals, "u": rows[:n]},
+                          ensure_ascii=False, separators=(",", ":")).encode()
+        z = zlib.compressobj(9, zlib.DEFLATED, -15)  # «сырой» deflate — его умеет распаковать браузер
+        return base64.urlsafe_b64encode(z.compress(data) + z.flush()).decode().rstrip("=")
+
+    best = pack(len(rows))
+    if len(best) > limit:  # больше всего строк, при которых адрес ещё влезает
+        lo, hi = 0, len(rows)
+        best = pack(0)
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            p = pack(mid)
+            if len(p) <= limit:
+                lo, best = mid, p
+            else:
+                hi = mid - 1
+    return best
 
 
 async def cmd_untranslated(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:

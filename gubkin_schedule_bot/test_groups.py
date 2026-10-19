@@ -957,3 +957,32 @@ def test_sync_does_not_remove_someone_elses_lock(tmp_path, monkeypatch):
     monkeypatch.setattr(sync, "_run", lambda interactive: sync.LOCK.write_text("12345") and 0)
     assert sync.run(False) == 0
     assert sync.LOCK.read_text() == "12345"
+
+
+def test_admin_payload_fits_in_url(env):
+    """Много пользователей: адрес статистики не длиннее лимита, итоги — по всем, в списке — самые недавние."""
+    import random
+    rnd = random.Random(1)
+    now = dt.datetime.now(bot.MSK)
+    today = now.strftime("%Y-%m-%d")
+    users = {}
+    for i in range(1500):
+        last = (now - dt.timedelta(hours=i)).strftime("%Y-%m-%d %H:%M")
+        name = "".join(rnd.choice("абвгдежзиклмнопрстуфхцчшэюя") for _ in range(rnd.randint(4, 12)))
+        users[str(100000000 + i * 7919)] = {
+            "name": name.title() + " " + name[::-1], "username": f"user{rnd.randint(0, 10**8)}", "first": last,
+            "last": last, "count": rnd.randint(1, 900), "acts": {"today": 3, "week": 2},
+            "days": {(now - dt.timedelta(days=d)).strftime("%Y-%m-%d"): 2 for d in range(60)}}
+    payload = bot._admin_payload(users)
+    assert len(payload) <= bot.ADMIN_PAYLOAD_MAX
+    data = json.loads(zlib.decompress(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)), -15))
+    t = data["t"]
+    assert t["users"] == 1500 and t["acts"] == {"today": 4500, "week": 3000}
+    assert len(t["days"]) == 14 and t["days"][today] == [3000, 1500]
+    assert 0 < len(data["u"]) < 1500
+    assert [r[4] for r in data["u"]] == sorted((r[4] for r in data["u"]), reverse=True)  # самые недавние
+    # мало пользователей — в список попадают все
+    small = dict(list(users.items())[:5])
+    rows = json.loads(zlib.decompress(base64.urlsafe_b64decode(
+        (p := bot._admin_payload(small)) + "=" * (-len(p) % 4)), -15))["u"]
+    assert len(rows) == 5
