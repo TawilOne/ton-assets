@@ -2,7 +2,7 @@
 cd /d "%~dp0"
 title Gubkin schedule bot
 echo Updating the bot (git pull)...
-git pull
+git pull -q
 echo.
 echo Starting the bot. To stop it, close this window or press Ctrl+C.
 echo.
