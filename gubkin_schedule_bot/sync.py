@@ -2,9 +2,9 @@
 
 Что скачивается (чем меньше запросов, тем реже сайт просит капчу):
   1) группы, которые выбрали пользователи бота, — текущая и 2 следующие недели, каждый раз;
-  2) все остальные группы факультетов — текущая и следующая неделя, раз в сутки
+  2) все остальные группы факультетов — одна неделя (пн–чт текущая, пт–вс следующая), раз в сутки
      (чтобы новичок сразу увидел расписание своей группы);
-  3) выбранные группы — остальные недели семестра: будущие раз в сутки, прошедшие — если их нет.
+  3) выбранные группы — остальные недели семестра: будущие раз в 3 дня, прошедшие — если их нет.
 За один запуск — не дольше 11 минут (вручную — 25): что не успели, докачается в следующий раз.
 
 Сайт Губкина не пускает серверы хостингов, а домашний интернет пускает. Поэтому расписание
@@ -263,8 +263,12 @@ def _save_failed(data: dict) -> None:
         pass
 
 
+FAR_AGE = 3 * 86400 - 4 * 3600  # дальние недели выбранных групп — раз в 3 дня (почти не меняются)
+
+
 def plan(groups: list[dict], wanted: set[str], weeks: list[dt.date], this_monday: dt.date,
-         others_limit: int | None = None, failed: dict | None = None) -> list[tuple]:
+         others_limit: int | None = None, failed: dict | None = None,
+         today: dt.date | None = None) -> list[tuple]:
     """Что скачать в этот раз, по порядку важности: [(понедельник, группа, выбрана ли)].
     others_limit — сколько недель невыбранных групп брать за раз (по расписанию — порциями,
     чтобы не делать сотню запросов подряд и не нарваться на капчу).
@@ -278,17 +282,19 @@ def plan(groups: list[dict], wanted: set[str], weeks: list[dt.date], this_monday
     # 1) выбранные группы: текущая и 2 следующие недели — каждый раз (там бывают переносы)
     for g in chosen:
         tasks += [(m, g, True) for m in near if m in weeks]
-    # 2) остальные группы: текущая, затем следующая неделя — если их нет или они старше суток;
-    #    сначала те, которых нет совсем, потом самые старые
+    # 2) остальные группы: одна неделя — та, которую будут смотреть: с понедельника по четверг текущая,
+    #    с пятницы — следующая; если её нет или она старше суток. Сначала те, которых нет совсем
+    today = today or dt.date.today()
+    others_week = near[1] if today.weekday() >= 4 else near[0]
     stale = []
-    for k, m in enumerate(near[:2]):
+    for k, m in enumerate([others_week]):
         for g in others:
             age = _age(m, g["id"])
             if m in weeks and (age is None or age > DAY):
                 stale.append((age is not None, k, -(age or 0), m, g))
     stale.sort(key=lambda x: x[:3])
     tasks += [(m, g, False) for *_, m, g in stale[:others_limit]]
-    # 3) выбранные группы: остальные недели семестра — будущие раз в сутки, прошедшие — только если их нет
+    # 3) выбранные группы: остальные недели семестра — будущие раз в 3 дня, прошедшие — только если их нет
     for g in chosen:
         for m in weeks:
             if m in near:
@@ -297,7 +303,7 @@ def plan(groups: list[dict], wanted: set[str], weeks: list[dt.date], this_monday
             err = failed.get(f"{m.isoformat()}|{g['id']}")
             if err and time.time() - err < (7 * 86400 if m < this_monday else DAY):
                 continue
-            if age is None or (m > this_monday and age > DAY):
+            if age is None or (m > this_monday and age > FAR_AGE):
                 tasks.append((m, g, True))
     return tasks
 
@@ -375,7 +381,8 @@ def download(interactive: bool, srv: str) -> int:
     bot.client.validate = _validator(_check_saved(), stats)
     wanted = wanted_codes(srv)
     bad_weeks = _load_failed()
-    tasks = plan(groups, wanted, weeks, this_monday, others_limit=None if interactive else 60, failed=bad_weeks)
+    tasks = plan(groups, wanted, weeks, this_monday, others_limit=None if interactive else 60, failed=bad_weeks,
+                 today=today)
     say(f"групп: {len(groups)}, выбраны пользователями: {len(wanted & {g['code'] for g in groups})}, "
         f"запросов в плане: {len(tasks)}")
     deadline = time.monotonic() + (25 if interactive else 11) * 60  # задача Windows живёт не дольше 15 минут

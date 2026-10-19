@@ -295,20 +295,33 @@ def test_sync_plan_order(monkeypatch):
     monkeypatch.setattr(bot, "client", GubkinClient())
     weeks = sync.mondays(TODAY)
     groups = [{"id": str(i), "code": c} for i, c in enumerate(["А-26-01", "Б-26-02", "В-25-01"])]
-    tasks = sync.plan(groups, {"Б-26-02"}, weeks, MONDAY)
+    tuesday, saturday = MONDAY + dt.timedelta(days=1), MONDAY + dt.timedelta(days=5)
+    tasks = sync.plan(groups, {"Б-26-02"}, weeks, MONDAY, today=tuesday)
     first = [(m, g["code"]) for m, g, _ in tasks[:3]]
     assert first == [(MONDAY + dt.timedelta(weeks=k), "Б-26-02") for k in range(3)]
+    # остальные группы — одна неделя: в будни текущая...
     others = [(m, g["code"]) for m, g, chosen in tasks if not chosen]
-    assert others == [(MONDAY, "А-26-01"), (MONDAY, "В-25-01"),
-                      (MONDAY + dt.timedelta(weeks=1), "А-26-01"), (MONDAY + dt.timedelta(weeks=1), "В-25-01")]
+    assert others == [(MONDAY, "А-26-01"), (MONDAY, "В-25-01")]
+    # ...а с пятницы — следующая (её и будут смотреть)
+    tasks_sat = sync.plan(groups, {"Б-26-02"}, weeks, MONDAY, today=saturday)
+    nxt = MONDAY + dt.timedelta(weeks=1)
+    assert [(m, g["code"]) for m, g, c in tasks_sat if not c] == [(nxt, "А-26-01"), (nxt, "В-25-01")]
     rest = [m for m, g, chosen in tasks[3:] if chosen]
     assert len(rest) == len(weeks) - 3 and all(g["code"] == "Б-26-02" for _, g, c in tasks if c)
     # всё свежее — остальные группы не качаем, у выбранной — только ближние недели
     for m in weeks:
         for g in groups:
             bot.client._cache[(m, g["id"])] = (time.time(), {})
-    tasks = sync.plan(groups, {"Б-26-02"}, weeks, MONDAY)
+    tasks = sync.plan(groups, {"Б-26-02"}, weeks, MONDAY, today=tuesday)
     assert [(m, g["code"]) for m, g, _ in tasks] == [(MONDAY + dt.timedelta(weeks=k), "Б-26-02") for k in range(3)]
+    # дальние недели выбранной группы — раз в 3 дня: через сутки ещё не качаем, через 3 дня — качаем
+    far = [m for m in weeks if m > MONDAY + dt.timedelta(weeks=2)]
+    for m in far:
+        bot.client._cache[(m, "1")] = (time.time() - 30 * 3600, {})
+    assert not [m for m, g, _ in sync.plan(groups, {"Б-26-02"}, weeks, MONDAY, today=tuesday) if m in far]
+    for m in far:
+        bot.client._cache[(m, "1")] = (time.time() - 3 * 86400, {})
+    assert [m for m, g, _ in sync.plan(groups, {"Б-26-02"}, weeks, MONDAY, today=tuesday) if m in far] == far
 
 
 def test_sync_plan_limits_other_groups(monkeypatch):
@@ -318,12 +331,13 @@ def test_sync_plan_limits_other_groups(monkeypatch):
     bot.client._cache[(MONDAY, "0")] = (time.time() - 30 * 3600, {})  # есть, но старая
     bot.client._cache[(MONDAY, "1")] = (time.time() - 50 * 3600, {})  # ещё старее
     bot.client._cache[(MONDAY, "2")] = (time.time(), {})              # свежая — не нужна
-    tasks = sync.plan(groups, set(), weeks, MONDAY, others_limit=4)
+    tuesday = MONDAY + dt.timedelta(days=1)
+    tasks = sync.plan(groups, set(), weeks, MONDAY, others_limit=3, today=tuesday)
     assert [(m, g["code"]) for m, g, _ in tasks] == [
         (MONDAY, "Г-26-03"), (MONDAY, "Г-26-04"),  # сначала тех, которых нет совсем
-        (MONDAY + dt.timedelta(weeks=1), "Г-26-00"), (MONDAY + dt.timedelta(weeks=1), "Г-26-01")]
-    tasks = sync.plan(groups, set(), weeks, MONDAY)
-    assert (MONDAY, "Г-26-01") in [(m, g["code"]) for m, g, _ in tasks][-2:]  # самые старые — после отсутствующих
+        (MONDAY, "Г-26-01")]                         # потом самую старую
+    tasks = sync.plan(groups, set(), weeks, MONDAY, today=tuesday)
+    assert [(m, g["code"]) for m, g, _ in tasks][-2:] == [(MONDAY, "Г-26-01"), (MONDAY, "Г-26-00")]
 
 
 def test_sync_end_to_end(tmp_path, monkeypatch):
@@ -379,7 +393,7 @@ def test_sync_end_to_end(tmp_path, monkeypatch):
     assert len(chosen) == 3 * len(weeks)  # выбранные группы (обоих факультетов) — весь семестр
     others = {k.split("|")[1] for k in cache} - {"10706", "10707", "20001"}
     assert others == {"10600", "10500", "10800", "20002", "20003"}
-    assert all(len([k for k in cache if k.endswith("|" + g)]) == 2 for g in others)  # остальные — 2 недели
+    assert all(len([k for k in cache if k.endswith("|" + g)]) == 1 for g in others)  # остальные — 1 неделя
     sample = cache[f"{MONDAY.isoformat()}|10707"][1]
     assert "extra" not in json.dumps(sample) and "photo" not in json.dumps(sample)
     assert json.loads(pushed["sync_status.json"])["ok"]
