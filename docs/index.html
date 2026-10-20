@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#000000">
 <title>Где пара — Губкин</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -23,7 +23,7 @@
     --radius: 22px;
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-  html, body { background: var(--bg); }
+  html, body { background: var(--bg); touch-action: pan-x pan-y; }  /* без увеличения всей страницы */
   body {
     margin: 0; color: var(--text);
     font: 15px/1.45 Inter, -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
@@ -263,17 +263,36 @@ function centerOnDot() {
   map.scrollLeft = dot.offsetLeft - map.clientWidth / 2;
   map.scrollTop = dot.offsetTop - map.clientHeight / 2;
 }
-function bindZoom() {
-  const btn = document.getElementById("zoom");
-  if (!btn) return;
-  btn.onclick = () => {
-    zoomed = !zoomed;
-    document.getElementById("map").classList.toggle("zoom", zoomed);
-    btn.textContent = zoomed ? "−" : "+";
-    if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred("light");
-    setTimeout(centerOnDot, 360);
-  };
+function setZoom(on) {
+  const btn = document.getElementById("zoom"), map = document.getElementById("map");
+  if (!btn || !map || on === zoomed) return;
+  zoomed = on;
+  map.classList.toggle("zoom", zoomed);
+  btn.textContent = zoomed ? "−" : "+";
+  if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred("light");
+  setTimeout(centerOnDot, 360);
 }
+function bindZoom() {
+  const btn = document.getElementById("zoom"), map = document.getElementById("map");
+  if (!btn || !map) return;
+  btn.onclick = () => setZoom(!zoomed);
+  // два пальца на карте: развели — увеличить, свели — уменьшить (вместо увеличения всей страницы)
+  let start = 0, scale = 1;
+  const dist = t => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+  map.addEventListener("touchstart", e => { if (e.touches.length === 2) { start = dist(e.touches); scale = 1; } }, { passive: true });
+  map.addEventListener("touchmove", e => {
+    if (e.touches.length !== 2 || !start) return;
+    e.preventDefault();
+    scale = dist(e.touches) / start;
+  }, { passive: false });
+  map.addEventListener("touchend", e => {
+    if (!start || e.touches.length) return;
+    if (scale > 1.15) setZoom(true); else if (scale < 0.87) setZoom(false);
+    start = 0;
+  });
+}
+// iPhone увеличивает всю страницу двумя пальцами, даже если в viewport просить этого не делать
+for (const ev of ["gesturestart", "gesturechange", "gestureend"]) document.addEventListener(ev, e => e.preventDefault(), { passive: false });
 
 const minutes = s => { const [h, m] = s.split(":").map(Number); return h * 60 + m; };
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
