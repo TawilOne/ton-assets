@@ -211,6 +211,9 @@ def _fetch_faculties(interactive: bool) -> list[dict]:
         if chosen is None and cfg["key"] == bot.DEFAULT_FACULTY:  # не нашли по названию — ищем по группе
             f, rows, _ = _with_captcha(interactive, bot.client.find_faculty, bot.GROUP_CODE, bot.FACULTY_HINT)
             chosen = {"key": cfg["key"], "id": f["id"], "name": name(f), "groups": _group_rows(rows)}
+        if chosen is None and matches:  # факультет на сайте есть, но групп у него нет (сайт отдаёт пустой список)
+            say(f"{name(matches[0])}: на сайте пока нет ни одной группы — пропускаем")
+            continue
         if chosen is None:
             say(f"не найден факультет «{' + '.join(words)}». Факультеты на сайте: " + "; ".join(name(f) for f in site))
             continue
