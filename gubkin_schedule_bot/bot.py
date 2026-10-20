@@ -1230,9 +1230,15 @@ def _faculty_counts(users: dict, groups: dict) -> list:
     """[[название факультета, сколько людей], ...] по выбранным группам — больше всего первым;
     в конце — те, кто группу не выбирал (или её нет в списке факультетов)."""
     fac_of = {g["code"]: g.get("fac") for g in _faculty_groups()}
+    try:  # и прямо из groups.json — на случай, если список в памяти бота устарел
+        for f in json.loads(GROUPS_FILE.read_text(encoding="utf-8")).get("faculties") or []:
+            for g in f.get("groups") or []:
+                fac_of.setdefault(normalize_code(str(g.get("code") or "")), f.get("key"))
+    except (OSError, ValueError, AttributeError, TypeError):
+        pass
     counts: dict[str, int] = {}
     for uid in users:
-        key = fac_of.get(groups.get(uid, ""))
+        key = fac_of.get(normalize_code(groups.get(uid, "")))
         counts[key] = counts.get(key, 0) + 1
     rows = [[f["ru"], counts[f["key"]]] for f in FACULTIES if counts.get(f["key"])]
     rows.sort(key=lambda r: -r[1])
