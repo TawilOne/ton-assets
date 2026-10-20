@@ -34,11 +34,14 @@ function locateRoom(text) {
                       "Grand amphithéâtre, entrée par le bâtiment principal (bâtiment 1)") };
   }
   if (low.includes("спортзал") || low.includes("спортивный зал")) {
-    return { building: "k2", floor: 0, room: text, planId: "k2-0",
+    const g = low.match(/(\d)/);  // «Спортзал №2» -> «Спортзал-2», как на схеме цокольного этажа
+    return { building: "k2", floor: 0, room: g ? `Спортзал-${g[1]}` : text, planId: "k2-0",
              note: L3("Спортзалы № 1–3 — в цокольном этаже 2 корпуса",
                       "Gyms 1–3 are on the lower ground floor of Building 2",
                       "Les gymnases 1 à 3 se trouvent au demi-sous-sol du bâtiment 2") };
   }
+  const c = text.trim().match(/^ц\s*-?\s*(\d{3}\s*[а-яёa-z]*)/i);  // цокольный этаж 2 корпуса: «Ц117», «Ц107ТБ»
+  if (c) return { building: "k2", floor: 0, room: normRoom("Ц" + c[1]), planId: "k2-0", note: "" };
   const m = text.trim().match(/^(\d{3,4})\s*(?:([а-яёa-z])(?![а-яёa-z])|([-/]\s*\d{1,2}))?/i);
   if (!m) return null;
   const d = m[1], room = normRoom(d + (m[2] || m[3] || ""));
@@ -61,12 +64,13 @@ function normRoom(s) {
 function findMark(rooms, room) {
   if (!room) return null;
   const key = normRoom(room);
-  return rooms[key] || rooms[key.replace(/[-/].*$/, "")] || rooms[key.replace(/[А-Я]$/, "")] || null;
+  return rooms[room] || rooms[key] || rooms[key.replace(/[-/].*$/, "")] || rooms[key.replace(/[А-Я]$/, "")] || null;
 }
 
 // этаж по-русски / по-английски (1st floor = уровень земли) / по-французски (1 этаж = rez-de-chaussée)
 function floorLabel(floor) {
   if (floor === null || floor === undefined) return "";
+  if (floor === 1.5) return L3("между 1 и 2 этажом", "mezzanine (between floors 1 and 2)", "entresol (entre le RDC et le 1er)");
   if (LANG === "en") {
     if (floor === 0) return "lower ground floor";
     const suf = floor % 100 >= 11 && floor % 100 <= 13 ? "th" : ({ 1: "st", 2: "nd", 3: "rd" }[floor % 10] || "th");

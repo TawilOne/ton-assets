@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
-<script src="campus.js?v=93a7c2b7"></script>
+<script src="campus.js?v=d74aaa1f"></script>
 <style>
   :root {
     --bg: #000;
@@ -330,7 +330,10 @@ function heroHTML(l, loc, cur, now) {
   else if (!isPast) { pct = 0; right = TX.in(dur(s - now)); }
   else { pct = 100; right = TX.over; }
   const chips = [];
-  if (loc) { chips.push(BUILDINGS[loc.building].name); if (loc.floor !== null) chips.push(floorLabel(loc.floor)); }
+  if (loc) {  // этаж — по схеме, где нашёлся кабинет (у 2 корпуса есть этаж между 1 и 2 с номерами 11xx)
+    const mk = findMark(rooms, loc.room), fl = mk ? +String(mk.plan).split("-")[1] : loc.floor;
+    chips.push(BUILDINGS[loc.building].name); if (fl !== null && !isNaN(fl)) chips.push(floorLabel(fl));
+  }
   if (l[4]) chips.push(l[4]);
   return `<div class="card fade">
     <span class="chip-status ${status[0]}"><i></i>${status[1]}</span>
@@ -353,7 +356,7 @@ function floorTabs(building, shown, target) {
     .filter(n => !isNaN(n)).sort((a, b) => b - a);
   if (ids.length < 2) return "";
   return `<div class="floor-tabs">${ids.map(n =>
-    `<button type="button" class="ftab${n === shown ? " on" : ""}${n === target ? " here" : ""}" data-floor="${n}">${n}</button>`).join("")}</div>`;
+    `<button type="button" class="ftab${n === shown ? " on" : ""}${n === target ? " here" : ""}" data-floor="${n}">${n === 1.5 ? "1½" : n === 0 ? "Ц" : n}</button>`).join("")}</div>`;
 }
 
 function planHTML(loc) {
