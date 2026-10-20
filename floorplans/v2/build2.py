@@ -402,6 +402,11 @@ def main():
         print(f"этаж {f}: кабинетов {len(out)}" + (f", не размещены: {', '.join(lost)}" if lost else ""))
         if preview:
             overlay(f, spec, cells, preview)
+    # карты других корпусов (k2-…, k3-…, lib-…), нарисованные вручную, не трогаем — только главный корпус
+    old_rooms = json.loads((DOCS / "rooms.json").read_text(encoding="utf-8"))
+    old_plans = json.loads((DOCS / "plans.json").read_text(encoding="utf-8"))
+    rooms.update({k: v for k, v in old_rooms.items() if not v["plan"].startswith("main-") and k not in rooms})
+    plans.update({k: v for k, v in old_plans.items() if not k.startswith("main-")})
     (DOCS / "rooms.json").write_text(json.dumps(dict(sorted(rooms.items())), ensure_ascii=False, indent=1),
                                      encoding="utf-8")
     (DOCS / "plans.json").write_text(json.dumps(dict(sorted(plans.items())), ensure_ascii=False, indent=1),
