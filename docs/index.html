@@ -114,6 +114,9 @@
                 background: var(--red); padding: 2px 7px; border-radius: 7px; z-index: 2;
                 box-shadow: 0 4px 14px rgba(255,0,0,.5); }
   .map.zoom .lbl.target { font-size: 14px; }
+  .lbl.target.below { transform: translate(-50%, 90%); }
+  .lbl.target.side { transform: translate(9px, -50%); }
+  .lbl.target.side-left { transform: translate(calc(-100% - 9px), -50%); }
   .zoom-btn { position: absolute; right: 10px; bottom: 10px; width: 36px; height: 36px; border-radius: 12px;
               border: 1px solid var(--line); background: rgba(23,23,26,.85); color: var(--text); font-size: 17px;
               backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
@@ -263,6 +266,20 @@ function centerOnDot() {
   map.scrollLeft = dot.offsetLeft - map.clientWidth / 2;
   map.scrollTop = dot.offsetTop - map.clientHeight / 2;
 }
+// ярлык с номером — над точкой; если сверху у карты для него нет места, ставим под точкой
+function placeLabel() {
+  const t = document.querySelector(".lbl.target"), inner = document.querySelector(".map-inner");
+  if (!t || !inner) return;
+  t.classList.remove("below", "side", "side-left");
+  const box = inner.getBoundingClientRect();
+  if (t.getBoundingClientRect().top >= box.top + 2) return;
+  t.classList.add("below");
+  if (t.getBoundingClientRect().bottom <= box.bottom - 2) return;
+  // схема низкая (2 корпус без увеличения) — ни сверху, ни снизу не влезает: ярлык сбоку от точки
+  t.classList.remove("below");
+  t.classList.add("side");
+  if (t.getBoundingClientRect().right > box.right - 2) t.classList.replace("side", "side-left");
+}
 function setZoom(on) {
   const btn = document.getElementById("zoom"), map = document.getElementById("map");
   if (!btn || !map || on === zoomed) return;
@@ -270,7 +287,7 @@ function setZoom(on) {
   map.classList.toggle("zoom", zoomed);
   btn.textContent = zoomed ? "−" : "+";
   if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred("light");
-  setTimeout(centerOnDot, 360);
+  setTimeout(() => { placeLabel(); centerOnDot(); }, 360);
 }
 function bindZoom() {
   const btn = document.getElementById("zoom"), map = document.getElementById("map");
@@ -380,10 +397,7 @@ function planHTML(loc) {
     const away = `<div class="empty-note">${esc(TX.away(floorLabel(targetFloor)))} <a href="#" class="back-floor">${TX.back}</a></div>`;
     const targetKey = mark ? Object.keys(rooms).find(k => rooms[k] === mark) : "";
     // у верхнего края карты ярлык не поместится над точкой — ставим его под точкой
-    // у 2 корпуса схема низкая и вытянутая: над верхним рядом кабинетов ярлык тоже не помещается
-    const wide = String(planId).startsWith("k2-");
-    const below = mark && (mark.y < 0.15 || (wide && mark.y < 0.5)) ? ";transform:translate(-50%,90%)" : "";
-    const labels = mark ? `<span class="lbl target" style="left:${mark.x * 100}%;top:${mark.y * 100}%${below}">${esc(targetKey)}</span>` : "";
+    const labels = mark ? `<span class="lbl target" style="left:${mark.x * 100}%;top:${mark.y * 100}%">${esc(targetKey)}</span>` : "";
     return `<div class="card fade"><div class="section-title"><h2>${TX.plan}</h2><span>${esc(where)}</span></div>
       <div class="map-row"><div class="map-wrap"><div class="map ${zoomed ? "zoom" : ""}" id="map"><div class="map-inner">
         ${svgCache[planId]}${labels}
@@ -447,6 +461,7 @@ function render() {
     if (back) back.onclick = e => { e.preventDefault(); viewFloor = null; lastKey = ""; render(); };
     const t = main.querySelector(".lbl.target");  // подсветить ячейку нужного кабинета на схеме
     if (t) main.querySelectorAll(`.floor-svg [data-room="${CSS.escape(t.textContent)}"]`).forEach(e => e.classList.add("target"));
+    placeLabel();
     if (zoomed) setTimeout(centerOnDot, 50);
   }
 }
@@ -457,6 +472,7 @@ Promise.all([
   fetch("plans.json", { cache: "no-store" }).then(r => r.json()).catch(() => ({})),
 ]).then(([r, p]) => { rooms = r; plans = p; lastKey = ""; render(); });
 render();
+window.addEventListener("resize", placeLabel);
 setInterval(render, 5000);  // часы, прогресс пары и переключение на следующую пару
 </script>
 </body>
