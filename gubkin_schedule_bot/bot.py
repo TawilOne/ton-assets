@@ -1226,6 +1226,21 @@ async def cmd_users(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                                                                  web_app=WebAppInfo(url))]]))
 
 
+def _faculty_counts(users: dict, groups: dict) -> list:
+    """[[название факультета, сколько людей], ...] по выбранным группам — больше всего первым;
+    в конце — те, кто группу не выбирал (или её нет в списке факультетов)."""
+    fac_of = {g["code"]: g.get("fac") for g in _faculty_groups()}
+    counts: dict[str, int] = {}
+    for uid in users:
+        key = fac_of.get(groups.get(uid, ""))
+        counts[key] = counts.get(key, 0) + 1
+    rows = [[f["ru"], counts[f["key"]]] for f in FACULTIES if counts.get(f["key"])]
+    rows.sort(key=lambda r: -r[1])
+    if counts.get(None):
+        rows.append(["Группа не выбрана", counts[None]])
+    return rows
+
+
 ADMIN_PAYLOAD_MAX = 6000  # GitHub Pages не открывает слишком длинные адреса («URI Too Long»)
 
 
@@ -1252,7 +1267,7 @@ def _admin_payload(users: dict, limit: int = ADMIN_PAYLOAD_MAX) -> str:
               "today": sum(1 for u in users.values() if u.get("last", "").startswith(today)),
               "a7": sum(1 for u in users.values() if u.get("last", "") >= days[7]),
               "new7": sum(1 for u in users.values() if u.get("first", "") >= days[7]),
-              "acts": acts, "days": per_day}
+              "acts": acts, "days": per_day, "fac": _faculty_counts(users, groups)}
     rows = []
     for uid, u in sorted(users.items(), key=lambda kv: kv[1].get("last", ""), reverse=True)[:300]:
         rows.append([u.get("name") or "", u.get("username") or "", u.get("count", 0), u.get("first", ""),

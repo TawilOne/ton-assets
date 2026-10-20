@@ -993,3 +993,16 @@ def test_admin_payload_fits_in_url(env):
     rows = json.loads(zlib.decompress(base64.urlsafe_b64decode(
         (p := bot._admin_payload(small)) + "=" * (-len(p) % 4)), -15))["u"]
     assert len(rows) == 5
+
+
+def test_admin_payload_faculty_counts(env):
+    """В статистике — сколько людей с какого факультета (по выбранной группе) и сколько без группы."""
+    bot._set_user_group(1, "ГМ-26-11")
+    bot._set_user_group(2, "ГМ-26-12")
+    bot._set_user_group(3, "НЕТ-ТАКОЙ")
+    users = {str(i): {"name": f"u{i}", "first": "2026-10-01 10:00", "last": "2026-10-01 10:00", "count": 1}
+             for i in (1, 2, 3, 4)}
+    payload = bot._admin_payload(users)
+    fac = json.loads(zlib.decompress(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)), -15))["t"]["fac"]
+    geo = next(f["ru"] for f in bot.FACULTIES if f["key"] == "geo")
+    assert fac == [[geo, 2], ["Группа не выбрана", 2]]

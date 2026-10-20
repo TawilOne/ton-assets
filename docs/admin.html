@@ -46,6 +46,16 @@
   .brow { display: grid; grid-template-columns: 112px 1fr 40px; align-items: center; gap: 8px; font-size: 13px; }
   .brow .track { height: 10px; background: #1b1b20; border-radius: 0 4px 4px 0; overflow: hidden; }
   .brow .track i { display: block; height: 100%; background: var(--bar); border-radius: 0 4px 4px 0; }
+  .facs { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .frow { min-width: 0; }
+  .frow .fhead { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; font-size: 14px; margin-bottom: 5px; }
+  .frow .fhead span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .frow .fhead b { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .frow .fhead small { color: var(--muted); font-weight: 500; }
+  .frow .track { height: 8px; background: #1b1b20; border-radius: 4px; overflow: hidden; }
+  .frow .track i { display: block; height: 100%; background: var(--bar); border-radius: 4px; }
+  .frow.none .fhead span { color: var(--muted); }
+  .frow.none .track i { background: #3a3a44; }
   .brow .n { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
 
   /* пользователи */
@@ -240,6 +250,15 @@ function render() {
       </div>
       <div class="axis"><span>${shortDay(days[0])}</span><span>${shortDay(days[7])}</span><span>сегодня</span></div>
     </div>
+
+    ${totals && totals.fac && totals.fac.length ? (() => {
+      const all = totals.fac.reduce((a, r) => a + r[1], 0), max = Math.max(1, ...totals.fac.map(r => r[1]));
+      return `<div class="card">
+      <h2>Факультеты <span>по выбранной группе</span></h2>
+      <div class="facs">${totals.fac.map(([name, n]) => `<div class="frow${name === "Группа не выбрана" ? " none" : ""}">
+        <div class="fhead"><span>${esc(name)}</span><b>${n}<small> · ${Math.round(n / all * 100)}%</small></b></div>
+        <div class="track"><i style="width:${n / max * 100}%"></i></div></div>`).join("")}</div></div>`;
+    })() : ""}
 
     <div class="card">
       <h2>Что нажимают <span>за всё время</span></h2>
