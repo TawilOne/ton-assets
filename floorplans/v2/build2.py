@@ -322,7 +322,8 @@ def doors(cells, spec):
     return f'<path class="door" d="{"".join(out)}"/><path class="leaf" d="{"".join(leaves)}"/>'
 
 
-def build(floor_no, spec, labels):
+def build(floor_no, spec, labels, plan=None):
+    plan = plan or f"main-{floor_no}"
     cells, lost = layout(floor_no, spec, labels)
     shapes = [r[:4] for r in spec["rows"]] + spec["halls"] + [s[1] for s in spec["stairs"]] + \
         [s[1] for s in spec["lifts"]] + spec["blocks"] + [c[1] for c in spec["cells"]] + spec["gaps"] + \
@@ -350,7 +351,7 @@ def build(floor_no, spec, labels):
         cx = sum(x for x, _ in p) / len(p)
         cy = sum(y for _, y in p) / len(p)
         nums.append(f'<text class="num" data-room="{name}" x="{f1(cx)}" y="{f1(cy)}" font-size="9">{name}</text>')
-        out[name] = {"plan": f"main-{floor_no}", "x": round((cx - vx) / vw, 4), "y": round((cy - vy) / vh, 4)}
+        out[name] = {"plan": plan, "x": round((cx - vx) / vw, 4), "y": round((cy - vy) / vh, 4)}
     for name, r in cells:
         if name is None:
             rooms_svg.append(rect(r, "room nolabel"))
@@ -362,7 +363,7 @@ def build(floor_no, spec, labels):
         rot = f' transform="rotate(-90 {f1(cx)} {f1(cy)})"' if h > w * 1.4 and w < len(name) * size * 0.62 else ""
         nums.append(f'<text class="num" data-room="{name}" x="{f1(cx)}" y="{f1(cy)}" '
                     f'font-size="{f1(size)}"{rot}>{name}</text>')
-        out[name] = {"plan": f"main-{floor_no}", "x": round((cx - vx) / vw, 4), "y": round((cy - vy) / vh, 4)}
+        out[name] = {"plan": plan, "x": round((cx - vx) / vw, 4), "y": round((cy - vy) / vh, 4)}
     svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{f1(vx)} {f1(vy)} {f1(vw)} {f1(vh)}" '
            f'class="floor-svg">'
            f'<g class="g-wall">{outline}</g><g class="g-base">{floor_fill}</g>'
