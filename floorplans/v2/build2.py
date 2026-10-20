@@ -22,9 +22,9 @@ MAX_CELL = 110      # кабинет не длиннее этого вдоль �
 MIN_CELL = 16       # кабинет не уже этого (ед.), если в ряду хватает места
 # ручные поправки: номера, которые распознаватель не прочитал на фото (позиция в каноне)
 OVERRIDE = {
-    "727": (21, 191), "730": (100, 440), "710Б": (986, 122),
-    "440": (100, 15), "441-6": (33, 70), "414": (1154, 358), "422": (980, 40),
-    "336Б": (248, 198), "241А": (1203, 362),
+    "727": (21, 191), "710Б": (986, 122),
+    "414": (1154, 358),
+    "336Б": (248, 198), "214А": (1203, 362),
     "120": (549, 229), "120А": (591, 202), "118": (663, 202),
 }
 
@@ -153,6 +153,18 @@ def by_walls(lo, hi, ws, rooms, k, mk):
     return out
 
 
+def wider_walls(walls, rect, axis):
+    """Перегородки сегмента, который теперь короче (его часть занял кабинет из cells):
+    берём их из записи для сегмента, который его содержит, — только те, что внутри."""
+    k0, k1 = (0, 2) if axis == "x" else (1, 3)
+    c0, c1 = (1, 3) if axis == "x" else (0, 2)
+    for key, found in walls.items():
+        r = [float(v) for v in key.split(",")]
+        if abs(r[c0] - rect[c0]) < .2 and abs(r[c1] - rect[c1]) < .2 and r[k0] <= rect[k0] + .2 and rect[k1] <= r[k1] + .2:
+            return {"walls": [w for w in found["walls"] if rect[k0] < w < rect[k1]]}
+    return None
+
+
 def layout(floor_no, spec, labels):
     """Раскладка: [(номер, (x0, y0, x1, y1))] + список номеров, которые никуда не попали."""
     fixed = [s[1] for s in spec["stairs"]] + [s[1] for s in spec["lifts"]] + [c[1] for c in spec["cells"]] \
@@ -188,7 +200,7 @@ def layout(floor_no, spec, labels):
         rooms = sorted(s["rooms"], key=lambda t: t[k])
         lo, hi = (x0, x1) if s["axis"] == "x" else (y0, y1)
         mk = (lambda a, b: (a, y0, b, y1)) if s["axis"] == "x" else (lambda a, b: (x0, a, x1, b))
-        found = walls.get(seg_key(s["rect"]))
+        found = walls.get(seg_key(s["rect"])) or wider_walls(walls, s["rect"], s["axis"])
         if found is not None:  # перегородки, найденные на фото (detect_walls.py), — режем по ним
             cells += by_walls(lo, hi, found["walls"], rooms, k, mk)
             continue
