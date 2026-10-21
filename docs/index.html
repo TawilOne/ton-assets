@@ -434,10 +434,11 @@ const CAMPUS_B = { main: "main", k2: "k2", lib: "lib" };
 document.getElementById("campus-t").textContent = L3("Карта вуза", "Campus map", "Plan du campus");
 document.getElementById("campus-s").textContent = L3("Двор, главный корпус, 2 корпус, ДК, библиотека",
   "Grounds, main building, building 2, culture centre, library", "Cour, bâtiment principal, bâtiment 2, maison de la culture, bibliothèque");
-function setCampusLink(building) {
+function setCampusLink(building, floor) {
   const q = new URLSearchParams();
   if (LANG !== "ru") q.set("lg", LANG);
   if (CAMPUS_B[building]) q.set("b", CAMPUS_B[building]);
+  if (CAMPUS_B[building] && floor !== null && floor !== undefined && !isNaN(floor)) q.set("f", floor);
   document.getElementById("campus-btn").href = "campus.html" + (q.toString() ? "?" + q : "");
 }
 setCampusLink(null);
@@ -468,7 +469,8 @@ function render() {
   });
 
   const l = lessons[selected], loc = locateRoom(l[2]);
-  setCampusLink(loc && loc.building);
+  { const mk = loc && findMark(rooms, loc.room);  // корпус и этаж пары — карта вуза откроет его план
+    setCampusLink(loc && loc.building, mk ? +String(mk.plan).split("-")[1] : loc && loc.floor); }
   // перерисовываем главную часть только когда что-то поменялось (иначе анимации дёргаются)
   if (selected !== lastSel) viewFloor = null;  // выбрали другую пару — снова показываем её этаж
   const key = `${selected}|${viewFloor}|${now.min}|${Object.keys(rooms).length}|${Object.keys(plans).length}|${Object.values(svgCache).join("").length}`;

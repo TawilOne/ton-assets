@@ -53,6 +53,44 @@
   .campus-svg .lbl { font: 600 19px Inter, system-ui, sans-serif; fill: #9a9aa6; text-anchor: middle; dominant-baseline: central; }
   .campus-svg .lbl.on { fill: #fff; }
   .campus-svg .lbl.small { font-size: 15px; text-anchor: start; fill: #ff6060; }
+  /* план здания — панель снизу, открывается нажатием на здание */
+  /* панель — под картой, в общем потоке: карта над ней уменьшается и не перекрывается */
+  .sheet { display: none; flex: 0 0 auto; max-height: 52vh; flex-direction: column; margin-top: 12px;
+           padding: 14px; border-radius: 20px; background: var(--surface); border: 1px solid var(--line); }
+  .sheet.open { display: flex; animation: up .25s ease; }
+  @keyframes up { from { transform: translateY(16px); opacity: 0; } to { transform: none; opacity: 1; } }
+  .sheet-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .sheet-head h2 { margin: 0; font-size: 19px; font-weight: 800; flex: 1 1 auto; }
+  .sheet-head span { color: var(--muted); font-size: 13px; }
+  .close { width: 34px; height: 34px; border-radius: 11px; border: 1px solid var(--line); background: var(--surface-2);
+           color: var(--text); font-size: 16px; flex: 0 0 auto; }
+  .ftabs { display: flex; gap: 6px; overflow-x: auto; margin-bottom: 10px; scrollbar-width: none; touch-action: pan-x; }
+  .ftabs::-webkit-scrollbar { display: none; }
+  .ftab { flex: 0 0 auto; min-width: 40px; height: 36px; padding: 0 10px; border-radius: 11px; border: 1px solid var(--line);
+          background: var(--surface-2); color: var(--muted); font: 700 15px Inter, system-ui, sans-serif; }
+  .ftab.on { background: #fff; color: #000; }
+  .plan { overflow: auto; border-radius: 16px; border: 1px solid var(--line); background: #070708; touch-action: pan-x pan-y;
+          -webkit-overflow-scrolling: touch; min-height: 0; }
+  .plan-inner { width: 230%; }
+  .plan.k2 .plan-inner { width: 420%; }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 8px; }
+  .sheet-head, .ftabs, .hint { flex: 0 0 auto; }
+  .plan { flex: 1 1 auto; }
+  .noplan { color: var(--muted); padding: 22px 4px; text-align: center; }
+  /* схема этажа (plans/*.svg) — те же цвета, что в «Где пара» */
+  .floor-svg { display: block; width: 100%; height: auto; }
+  .floor-svg .wall { fill: none; stroke: #7a7a88; stroke-width: 6; stroke-linejoin: round; }
+  .floor-svg .base { fill: #101014; stroke: none; }
+  .floor-svg .hall { fill: #26262e; }
+  .floor-svg .block { fill: #111115; stroke: #5a5a67; stroke-width: 1.5; }
+  .floor-svg .room { fill: #131317; stroke: #5a5a67; stroke-width: 1.5; }
+  .floor-svg .door { fill: none; stroke: #26262e; stroke-width: 3; stroke-linecap: butt; }
+  .floor-svg .leaf { fill: none; stroke: #5a5a67; stroke-width: .8; }
+  .floor-svg .stair { fill: #24242c; stroke: #4a4a56; stroke-width: 1; }
+  .floor-svg .lift { fill: #1a1a20; stroke: #4a4a56; stroke-width: 1; }
+  .floor-svg .steps { fill: none; stroke: #4e4e5a; stroke-width: .9; }
+  .floor-svg .num { font-family: Inter, system-ui, sans-serif; font-weight: 600; fill: #b4b4c0;
+                    text-anchor: middle; dominant-baseline: central; }
   .empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); }
 </style>
 </head>
@@ -66,6 +104,12 @@
   <div class="zoom"><button id="zin" aria-label="+">+</button><button id="zout" aria-label="−">−</button><button id="zreset" aria-label="⟲">⟲</button></div>
 </div>
 <div class="chips" id="chips"></div>
+<div class="sheet" id="sheet">
+  <div class="sheet-head"><h2 id="sheet-t"></h2><span id="sheet-f"></span><button class="close" id="close" aria-label="×">✕</button></div>
+  <div class="ftabs" id="ftabs"></div>
+  <div class="plan" id="plan"></div>
+  <div class="hint" id="hint"></div>
+</div>
 
 <script>
 const tg = window.Telegram && window.Telegram.WebApp;
@@ -152,9 +196,55 @@ stage.addEventListener("pointerup", up); stage.addEventListener("pointercancel",
 stage.addEventListener("wheel", e => { e.preventDefault(); zoomAt(e.deltaY < 0 ? 1.15 : 1 / 1.15, ...local(e)); }, { passive: false });
 for (const ev of ["gesturestart", "gesturechange"]) document.addEventListener(ev, e => e.preventDefault(), { passive: false });
 window.addEventListener("resize", fit);
+if (window.ResizeObserver) new ResizeObserver(() => fit()).observe(stage);  // открыли/закрыли план — карта подстраивается
 
-function select(b) {
+// ---- план здания по нажатию
+let plans = {}, floorShown = {}, wantFloor = parseFloat(params.get("f"));
+const svgCache = {};
+fetch("plans.json", { cache: "no-store" }).then(r => r.json()).then(j => { plans = j; if (selected && sheet.classList.contains("open")) openSheet(selected); }).catch(() => {});
+const PLAN_OF = { main: "main", k2: "k2" };  // у каких зданий есть поэтажные схемы
+const floorsOf = b => Object.keys(plans).filter(k => k.startsWith(b + "-")).map(k => +k.split("-")[1])
+  .filter(n => !isNaN(n)).sort((a, c) => c - a);
+const floorName = n => n === 1.5 ? L3("между 1 и 2 этажом", "mezzanine", "entresol")
+  : n === 0 ? L3("цокольный этаж", "lower ground floor", "demi-sous-sol") : L3(`${n} этаж`, `floor ${n}`, `étage ${n}`);
+const sheet = document.getElementById("sheet");
+document.getElementById("close").onclick = () => { if (selected) select(selected); };
+function openSheet(b) {
+  document.getElementById("sheet-t").textContent = NAMES[b];
+  const plan = document.getElementById("plan"), tabs = document.getElementById("ftabs");
+  const fl = PLAN_OF[b] ? floorsOf(PLAN_OF[b]) : [];
+  sheet.classList.add("open");
+  if (!fl.length) {
+    tabs.innerHTML = ""; document.getElementById("sheet-f").textContent = ""; document.getElementById("hint").textContent = "";
+    plan.className = "plan";
+    plan.innerHTML = `<div class="noplan">${L3("Плана этого здания пока нет — пришлите фото планов эвакуации, и мы его нарисуем 🙂",
+      "There is no plan of this building yet.", "Pas encore de plan pour ce bâtiment.")}</div>`;
+    return;
+  }
+  let f = floorShown[b];
+  if (f === undefined) f = fl.includes(wantFloor) && b === params.get("b") ? wantFloor : fl.includes(2) ? 2 : fl[0];
+  floorShown[b] = f;
+  tabs.innerHTML = fl.map(n => `<button class="ftab${n === f ? " on" : ""}" data-f="${n}">${n === 1.5 ? "1½" : n === 0 ? "Ц" : n}</button>`).join("");
+  tabs.querySelectorAll(".ftab").forEach(t => t.onclick = () => { floorShown[b] = +t.dataset.f; openSheet(b);
+    if (tg && tg.HapticFeedback) tg.HapticFeedback.selectionChanged(); });
+  document.getElementById("sheet-f").textContent = floorName(f);
+  document.getElementById("hint").textContent = L3("Листайте план пальцем, чтобы увидеть все кабинеты",
+    "Swipe the plan to see all rooms", "Faites glisser le plan pour voir toutes les salles");
+  plan.className = "plan " + PLAN_OF[b];
+  const id = `${PLAN_OF[b]}-${f}`;
+  const show = t => { if (floorShown[b] === f && selected === b) plan.innerHTML = `<div class="plan-inner">${t}</div>`; };
+  if (svgCache[id]) show(svgCache[id]);
+  else {
+    plan.innerHTML = `<div class="noplan">…</div>`;
+    fetch(plans[id]).then(r => r.text()).then(t => { svgCache[id] = t; show(t); }).catch(() => {});
+  }
+}
+
+function select(b, open = true) {
+  // нажали на подсвеченное здание: план закрыт — открыть, открыт — закрыть и снять подсветку
+  if (b === selected && open && !sheet.classList.contains("open")) { openSheet(b); return; }
   selected = selected === b ? "" : b;
+  if (selected && open) openSheet(selected); else sheet.classList.remove("open");
   inner.querySelectorAll("[data-b]").forEach(el => el.classList.toggle("on", el.dataset.b === selected));
   document.querySelectorAll(".chip").forEach(c => c.classList.toggle("on", c.dataset.b === selected));
   if (tg && tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
@@ -168,7 +258,7 @@ fetch("plans/campus.svg?v=1", { cache: "no-store" }).then(r => r.text()).then(t 
   const vb = (inner.querySelector("svg").getAttribute("viewBox") || "").split(/\s+/).map(Number);
   if (vb.length === 4) { svgW = vb[2]; svgH = vb[3]; }
   fit();
-  const b = selected; selected = ""; if (b && NAMES[b]) select(b);
+  const b = selected; selected = ""; if (b && NAMES[b]) select(b, false);  // корпус пары — только подсветить
 }).catch(() => {
   inner.innerHTML = `<div class="empty">${L3("Не удалось загрузить карту", "Could not load the map", "Impossible de charger le plan")}</div>`;
 });
