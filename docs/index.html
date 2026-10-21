@@ -35,6 +35,15 @@
       var(--bg);
     background-attachment: fixed;
   }
+  /* большая кнопка «Карта вуза» — открывает campus.html */
+  .campus-btn { display: flex; align-items: center; gap: 14px; margin: 0 0 14px; padding: 16px 18px; border-radius: var(--radius);
+                text-decoration: none; color: var(--text); border: 1px solid rgba(255,0,0,.35);
+                background: linear-gradient(135deg, rgba(255,0,0,.20), rgba(255,0,0,.05) 60%), var(--surface); }
+  .campus-btn:active { transform: scale(.98); }
+  .campus-btn .ico { font-size: 30px; line-height: 1; }
+  .campus-btn b { display: block; font-size: 18px; font-weight: 800; letter-spacing: -.01em; }
+  .campus-btn small { display: block; color: var(--muted); font-size: 13px; margin-top: 2px; }
+  .campus-btn .go { margin-left: auto; font-size: 26px; color: var(--muted); }
   .top { display: flex; align-items: flex-end; justify-content: space-between; margin: 4px 2px 18px; }
   .eyebrow { color: var(--muted); font-size: 13px; font-weight: 500; letter-spacing: .02em; }
   h1 { margin: 2px 0 0; font-size: 30px; font-weight: 800; letter-spacing: -.03em; }
@@ -196,6 +205,8 @@
   <button id="beta-close" aria-label="Скрыть">×</button>
 </div>
 <div id="main"></div>
+<a class="campus-btn" id="campus-btn" href="campus.html"><span class="ico">🗺</span><span><b id="campus-t">Карта вуза</b>
+  <small id="campus-s">Двор, главный корпус, 2 корпус, ДК, библиотека</small></span><span class="go">›</span></a>
 <div class="card" id="day"><div class="section-title"><h2 id="day-title">Пары дня</h2><span id="count"></span></div>
   <ul class="timeline" id="list"></ul></div>
 
@@ -418,6 +429,19 @@ function planHTML(loc) {
   return "";
 }
 
+// кнопка «Карта вуза»: язык и корпус текущей пары — он подсветится на карте
+const CAMPUS_B = { main: "main", k2: "k2", lib: "lib" };
+document.getElementById("campus-t").textContent = L3("Карта вуза", "Campus map", "Plan du campus");
+document.getElementById("campus-s").textContent = L3("Двор, главный корпус, 2 корпус, ДК, библиотека",
+  "Grounds, main building, building 2, culture centre, library", "Cour, bâtiment principal, bâtiment 2, maison de la culture, bibliothèque");
+function setCampusLink(building) {
+  const q = new URLSearchParams();
+  if (LANG !== "ru") q.set("lg", LANG);
+  if (CAMPUS_B[building]) q.set("b", CAMPUS_B[building]);
+  document.getElementById("campus-btn").href = "campus.html" + (q.toString() ? "?" + q : "");
+}
+setCampusLink(null);
+
 function render() {
   const now = nowMoscow();
   document.getElementById("clock").textContent = now.text;
@@ -444,6 +468,7 @@ function render() {
   });
 
   const l = lessons[selected], loc = locateRoom(l[2]);
+  setCampusLink(loc && loc.building);
   // перерисовываем главную часть только когда что-то поменялось (иначе анимации дёргаются)
   if (selected !== lastSel) viewFloor = null;  // выбрали другую пару — снова показываем её этаж
   const key = `${selected}|${viewFloor}|${now.min}|${Object.keys(rooms).length}|${Object.keys(plans).length}|${Object.values(svgCache).join("").length}`;
