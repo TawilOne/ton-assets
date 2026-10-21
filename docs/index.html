@@ -214,6 +214,9 @@
 const tg = window.Telegram && window.Telegram.WebApp;
 if (tg) {
   tg.ready(); tg.expand();
+  // после «Карты вуза» Telegram оставляет кнопку «Назад» вместо «Закрыть» — здесь она не нужна
+  const hideBack = () => { try { tg.BackButton && tg.BackButton.hide(); } catch (e) {} };
+  hideBack(); window.addEventListener("pageshow", hideBack);
   try { tg.setHeaderColor("#000000"); tg.setBackgroundColor("#000000"); tg.setBottomBarColor && tg.setBottomBarColor("#000000"); } catch (e) {}
 }
 

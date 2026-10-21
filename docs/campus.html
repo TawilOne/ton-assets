@@ -131,7 +131,10 @@ const NAMES = {
 };
 
 // назад — к расписанию (кнопка на странице и системная «Назад» в Telegram)
-const goBack = () => { if (history.length > 1) history.back(); else location.href = "index.html" + location.search; };
+const goBack = () => {
+  try { tg && tg.BackButton && tg.BackButton.hide(); } catch (e) {}  // в «Где пара» снова «Закрыть»
+  if (history.length > 1) history.back(); else location.href = "index.html" + location.search;
+};
 document.getElementById("back").onclick = goBack;
 if (tg && tg.BackButton) { tg.BackButton.show(); tg.BackButton.onClick(goBack); }
 
