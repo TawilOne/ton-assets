@@ -680,7 +680,7 @@ async def cmd_map(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     payload = [[l.start, l.end, l.room, i18n.subject(l.subject, lang)[:60], i18n.kind(l.kind, lang)]
                for l in lessons]
     url = (os.environ.get("WEBAPP_URL") or _read_setting("webapp.txt") or DEFAULT_WEBAPP_URL) + "?" + urlencode(
-        {"d": title, "l": json.dumps(payload, ensure_ascii=False, separators=(",", ":")), "lg": lang,
+        {"d": title, "dt": day.isoformat(), "l": json.dumps(payload, ensure_ascii=False, separators=(",", ":")), "lg": lang,
          "v": int(time.time() // 300)})  # новый адрес раз в 5 минут — Telegram не держит старую версию страницы
     button = InlineKeyboardMarkup([[InlineKeyboardButton(i18n.t("open_map", lang), web_app=WebAppInfo(url))]])
     note = "\n\n" + i18n.t("map_note", lang)
