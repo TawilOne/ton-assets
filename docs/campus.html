@@ -20,12 +20,12 @@
                font: 15px/1.45 Inter, -apple-system, system-ui, "Segoe UI", Roboto, sans-serif; touch-action: none; }
   body { display: flex; flex-direction: column;
          padding: max(12px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom)); }
-  .top { display: flex; align-items: center; gap: 12px; margin: 2px 0 12px; }
+  .top { flex: 0 0 auto; display: flex; align-items: center; gap: 12px; margin: 2px 0 12px; }
   .back { flex: 0 0 auto; width: 40px; height: 40px; border-radius: 14px; border: 1px solid var(--line);
           background: var(--surface-2); color: var(--text); font-size: 20px; }
   h1 { margin: 0; font-size: 24px; font-weight: 800; letter-spacing: -.02em; }
   .sub { color: var(--muted); font-size: 13px; }
-  .stage { position: relative; flex: 1 1 auto; min-height: 0; border-radius: 20px; overflow: hidden;
+  .stage { position: relative; flex: 1 1 auto; min-height: 120px; border-radius: 20px; overflow: hidden;
            border: 1px solid var(--line); background: #070708; }
   .inner { position: absolute; left: 0; top: 0; transform-origin: 0 0; will-change: transform; }
   .inner svg { display: block; width: 100%; height: 100%; }
@@ -33,7 +33,7 @@
   .zoom button { width: 40px; height: 40px; border-radius: 13px; border: 1px solid var(--line);
                  background: rgba(23,23,26,.88); color: var(--text); font-size: 18px;
                  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
-  .chips { display: flex; gap: 8px; overflow-x: auto; margin-top: 12px; padding-bottom: 2px; scrollbar-width: none; }
+  .chips { flex: 0 0 auto; display: flex; gap: 8px; overflow-x: auto; margin-top: 12px; padding-bottom: 2px; scrollbar-width: none; }
   .chips::-webkit-scrollbar { display: none; }
   .chip { flex: 0 0 auto; padding: 8px 14px; border-radius: 999px; border: 1px solid var(--line);
           background: var(--surface-2); color: var(--text); font: 600 14px Inter, system-ui, sans-serif; }
@@ -55,7 +55,7 @@
   .campus-svg .lbl.small { font-size: 15px; text-anchor: start; fill: #ff6060; }
   /* план здания — панель снизу, открывается нажатием на здание */
   /* панель — под картой, в общем потоке: карта над ней уменьшается и не перекрывается */
-  .sheet { display: none; flex: 0 0 auto; max-height: 52vh; flex-direction: column; margin-top: 12px;
+  .sheet { display: none; flex: 0 1 auto; height: 56vh; min-height: 0; flex-direction: column; margin-top: 12px;
            padding: 14px; border-radius: 20px; background: var(--surface); border: 1px solid var(--line); }
   .sheet.open { display: flex; animation: up .25s ease; }
   @keyframes up { from { transform: translateY(16px); opacity: 0; } to { transform: none; opacity: 1; } }
@@ -71,8 +71,8 @@
   .ftab.on { background: #fff; color: #000; }
   .plan { overflow: auto; border-radius: 16px; border: 1px solid var(--line); background: #070708; touch-action: pan-x pan-y;
           -webkit-overflow-scrolling: touch; min-height: 0; }
-  .plan-inner { width: 230%; }
-  .plan.k2 .plan-inner { width: 420%; }
+  .plan { display: flex; }
+  .plan-inner { flex: 0 0 auto; margin: auto; }  /* размер задаёт fitPlan(): план во всю высоту рамки */
   .hint { color: var(--muted); font-size: 12px; margin-top: 8px; }
   .sheet-head, .ftabs, .hint { flex: 0 0 auto; }
   .plan { flex: 1 1 auto; }
@@ -207,11 +207,24 @@ const svgCache = {};
 fetch("plans.json", { cache: "no-store" }).then(r => r.json()).then(j => { plans = j; if (selected && sheet.classList.contains("open")) openSheet(selected); }).catch(() => {});
 const PLAN_OF = { main: "main", k2: "k2" };  // у каких зданий есть поэтажные схемы
 const floorsOf = b => Object.keys(plans).filter(k => k.startsWith(b + "-")).map(k => +k.split("-")[1])
-  .filter(n => !isNaN(n)).sort((a, c) => c - a);
+  .filter(n => !isNaN(n)).sort((a, c) => a - c);  // слева направо по возрастанию: Ц, 1, 1½, 2…
 const floorName = n => n === 1.5 ? L3("между 1 и 2 этажом", "mezzanine", "entresol")
   : n === 0 ? L3("цокольный этаж", "lower ground floor", "demi-sous-sol") : L3(`${n} этаж`, `floor ${n}`, `étage ${n}`);
 const sheet = document.getElementById("sheet");
 document.getElementById("close").onclick = () => { if (selected) select(selected); };
+// план — на всю высоту рамки, но номера не мельче ~7 px и не крупнее ~14 px; остальное — листать
+function fitPlan() {
+  const plan = document.getElementById("plan"), inner = plan.querySelector(".plan-inner"), svg = inner && inner.querySelector("svg");
+  if (!svg) return;
+  const vb = (svg.getAttribute("viewBox") || "").split(/\s+/).map(Number);
+  if (vb.length !== 4) return;
+  const W = plan.clientWidth, H = plan.clientHeight;
+  const k = Math.min(Math.max(H / vb[3], W / vb[2], 0.75), 1.6);
+  inner.style.width = vb[2] * k + "px";
+  svg.style.width = "100%"; svg.style.height = "auto";
+  plan.scrollLeft = (plan.scrollWidth - W) / 2; plan.scrollTop = (plan.scrollHeight - H) / 2;
+}
+window.addEventListener("resize", fitPlan);
 function openSheet(b) {
   document.getElementById("sheet-t").textContent = NAMES[b];
   const plan = document.getElementById("plan"), tabs = document.getElementById("ftabs");
@@ -230,12 +243,14 @@ function openSheet(b) {
   tabs.innerHTML = fl.map(n => `<button class="ftab${n === f ? " on" : ""}" data-f="${n}">${n === 1.5 ? "1½" : n === 0 ? "Ц" : n}</button>`).join("");
   tabs.querySelectorAll(".ftab").forEach(t => t.onclick = () => { floorShown[b] = +t.dataset.f; openSheet(b);
     if (tg && tg.HapticFeedback) tg.HapticFeedback.selectionChanged(); });
+  const on = tabs.querySelector(".ftab.on");  // выбранный этаж — в зоне видимости ряда кнопок
+  if (on) tabs.scrollLeft = on.offsetLeft - (tabs.clientWidth - on.offsetWidth) / 2;
   document.getElementById("sheet-f").textContent = floorName(f);
   document.getElementById("hint").textContent = L3("Листайте план пальцем, чтобы увидеть все кабинеты",
     "Swipe the plan to see all rooms", "Faites glisser le plan pour voir toutes les salles");
   plan.className = "plan " + PLAN_OF[b];
   const id = `${PLAN_OF[b]}-${f}`;
-  const show = t => { if (floorShown[b] === f && selected === b) plan.innerHTML = `<div class="plan-inner">${t}</div>`; };
+  const show = t => { if (floorShown[b] === f && selected === b) { plan.innerHTML = `<div class="plan-inner">${t}</div>`; fitPlan(); } };
   if (svgCache[id]) show(svgCache[id]);
   else {
     plan.innerHTML = `<div class="noplan">…</div>`;
