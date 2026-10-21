@@ -217,8 +217,8 @@ function openSheet(b) {
   if (!fl.length) {
     tabs.innerHTML = ""; document.getElementById("sheet-f").textContent = ""; document.getElementById("hint").textContent = "";
     plan.className = "plan";
-    plan.innerHTML = `<div class="noplan">${L3("Плана этого здания пока нет — пришлите фото планов эвакуации, и мы его нарисуем 🙂",
-      "There is no plan of this building yet.", "Pas encore de plan pour ce bâtiment.")}</div>`;
+    plan.innerHTML = `<div class="noplan">${L3("План этого здания пока не добавлен",
+      "The plan of this building has not been added yet", "Le plan de ce bâtiment n'a pas encore été ajouté")}</div>`;
     return;
   }
   let f = floorShown[b];
