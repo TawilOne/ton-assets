@@ -185,7 +185,7 @@ PAUSE = 10 * 60      # передышка, когда сайт просит ка
 FAST, SLOW = 1.5, 3.0  # пауза между запросами: обычно и после капчи
 CALM = 100             # столько запросов без капчи — возвращаемся к обычному темпу
 CAPTCHA_GAP = 20  # меньше стольких запросов между капчами — сайт нас притормаживает, пора остановиться
-_captcha = {"solved": 0, "ok_since": 0}
+_captcha = {"solved": 0, "ok_since": 0, "wait": 0.0}  # wait — сколько секунд ушло на капчу и передышки
 
 
 def _with_captcha(interactive: bool, func, *args):
@@ -202,20 +202,29 @@ def _with_captcha(interactive: bool, func, *args):
         except CaptchaRequired:
             if not interactive:
                 raise
-            if _captcha["solved"] and _captcha["ok_since"] < CAPTCHA_GAP:
-                if not FULL["on"]:
-                    raise CaptchaTooOften("капча слишком часто")
-                # «всё за раз»: не долбим сайт, а ждём, пока он успокоится, и продолжаем
-                print(f"\n  ⏸ сайт просит передышку — жду {PAUSE // 60} минут и продолжу "
-                      "(окно не закрывайте, можно заниматься своими делами)")
-                _touch_lock()
-                for _ in range(PAUSE // 60):
-                    time.sleep(60)
-                    _touch_lock()
-            solve_captcha()
-            _captcha["solved"] += 1
-            _captcha["ok_since"] = 0
-            bot.client.delay = SLOW  # после капчи — помедленнее, пока сайт не успокоится
+            t0 = time.monotonic()
+            try:
+                _wait_captcha()
+            finally:
+                _captcha["wait"] += time.monotonic() - t0
+
+
+def _wait_captcha() -> None:
+    """Капча: при «слишком часто» — стоп (или передышка в режиме «всё за раз»), потом ввод кода."""
+    if _captcha["solved"] and _captcha["ok_since"] < CAPTCHA_GAP:
+        if not FULL["on"]:
+            raise CaptchaTooOften("капча слишком часто")
+        # «всё за раз»: не долбим сайт, а ждём, пока он успокоится, и продолжаем
+        print(f"\n  ⏸ сайт просит передышку — жду {PAUSE // 60} минут и продолжу "
+              "(окно не закрывайте, можно заниматься своими делами)")
+        _touch_lock()
+        for _ in range(PAUSE // 60):
+            time.sleep(60)
+            _touch_lock()
+    solve_captcha()
+    _captcha["solved"] += 1
+    _captcha["ok_since"] = 0
+    bot.client.delay = SLOW  # после капчи — помедленнее, пока сайт не успокоится
 
 
 def _group_rows(rows) -> list[dict]:
@@ -527,7 +536,7 @@ def download(interactive: bool, srv: str) -> int:
         in_a_row = in_a_row + 1 if no_link else 0
         if interactive:
             # скорость и сколько примерно осталось — по последним запросам, без пауз на капчу
-            took = time.monotonic() - started
+            took = max(0.1, time.monotonic() - started - _captcha["wait"])
             left = (len(tasks) - i) * took / i if i else 0
             eta = f"≈{left / 3600:.1f} ч" if left >= 5400 else f"≈{max(1, round(left / 60))} мин"
             print(f"\r  {i}/{len(tasks)}  {g['code']:<14} {took / i:4.1f} с/неделя, осталось {eta}   ",

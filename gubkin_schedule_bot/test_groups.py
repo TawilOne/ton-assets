@@ -1126,7 +1126,7 @@ def test_broken_files_dont_wipe_what_is_known(env, monkeypatch):
 def test_captcha_too_often_stops_instead_of_asking_again(monkeypatch):
     """Капча вернулась почти сразу после введённой — не мучаем человека, а останавливаемся."""
     real_solve = sync.solve_captcha
-    monkeypatch.setattr(sync, "_captcha", {"solved": 0, "ok_since": 0})
+    monkeypatch.setattr(sync, "_captcha", {"solved": 0, "ok_since": 0, "wait": 0.0})
     monkeypatch.setattr(bot, "client", GubkinClient())
     solved = []
     monkeypatch.setattr(sync, "solve_captcha", lambda: solved.append(1))
@@ -1156,7 +1156,7 @@ def test_captcha_too_often_stops_instead_of_asking_again(monkeypatch):
 
 def test_full_mode_waits_instead_of_stopping(monkeypatch):
     """«Всё за раз»: капча слишком часто — ждём передышку и продолжаем, а не останавливаемся."""
-    monkeypatch.setattr(sync, "_captcha", {"solved": 1, "ok_since": 0})
+    monkeypatch.setattr(sync, "_captcha", {"solved": 1, "ok_since": 0, "wait": 0.0})
     monkeypatch.setattr(sync, "FULL", {"on": True})
     monkeypatch.setattr(bot, "client", GubkinClient())
     monkeypatch.setattr(sync, "_touch_lock", lambda: None)
