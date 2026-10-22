@@ -289,6 +289,11 @@ TEXT = {
     "today": {"ru": "сегодня", "en": "today", "fr": "aujourd'hui"},
     "tomorrow": {"ru": "завтра", "en": "tomorrow", "fr": "demain"},
     "cancelled": {"ru": "пара отменена", "en": "class cancelled", "fr": "cours annulé"},
+    "chg_title": {"ru": "🔔 Изменение в расписании · {code}", "en": "🔔 Timetable change · {code}",
+                  "fr": "🔔 Changement d'emploi du temps · {code}"},
+    "chg_cancel": {"ru": "❌ Отмена", "en": "❌ Cancelled", "fr": "❌ Annulé"},
+    "chg_move": {"ru": "🔁 Перенос", "en": "🔁 Moved", "fr": "🔁 Déplacé"},
+    "chg_room": {"ru": "🚪 Другая аудитория", "en": "🚪 Room change", "fr": "🚪 Changement de salle"},
     "subgroup": {"ru": "{n} подгруппа", "en": "subgroup {n}", "fr": "sous-groupe {n}"},
     "break": {"ru": "☕ перемена {n} мин", "en": "☕ {n}-minute break", "fr": "☕ pause de {n}{NBSP}min".replace(
         "{NBSP}", NBSP)},

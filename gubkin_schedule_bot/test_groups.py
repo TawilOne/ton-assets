@@ -1006,3 +1006,40 @@ def test_admin_payload_faculty_counts(env):
     fac = json.loads(zlib.decompress(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)), -15))["t"]["fac"]
     geo = next(f["ru"] for f in bot.FACULTIES if f["key"] == "geo")
     assert fac == [[geo, 2], ["Группа не выбрана", 2]]
+
+
+class FakeBot:
+    def __init__(self):
+        self.sent = []
+
+    async def send_message(self, chat, text, **kw):
+        self.sent.append((chat, text))
+
+
+def test_changes_job_notifies_on_new_cancellation(env, monkeypatch):
+    """Отмена, появившаяся в новом расписании, приходит тем, кто выбрал группу; первое знакомство — молча."""
+    monkeypatch.setattr(bot, "CHANGES_FILE", env / "changes_seen.json")
+    monkeypatch.setattr(bot, "QUIET", (24 * 60, 0))
+    monkeypatch.setattr(bot, "_changes_mtime", [None])
+    bot._set_user_group(5, "ГМ-26-11")
+    bot._set_user_group(6, "ГМ-26-12")
+    c = ctx()
+    c.bot = FakeBot()
+    run(bot.changes_job(c))  # первый запуск: только запоминает
+    assert c.bot.sent == []
+    run(bot.changes_job(c))  # файл не менялся — ничего не делает
+    assert c.bot.sent == []
+
+    cache = json.loads((env / "cache.json").read_text(encoding="utf-8"))
+    key = f"{MONDAY.isoformat()}|10706"
+    cache[key][1]["rows"]["organizations"][0]["lessons"][0]["isCanceled"] = True
+    (env / "cache.json").write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
+    os.utime(env / "cache.json", (time.time() + 5, time.time() + 5))
+    run(bot.changes_job(c))
+    assert [chat for chat, _ in c.bot.sent] == [5]
+    text = c.bot.sent[0][1]
+    assert "ГМ-26-11" in text and "❌ Отмена" in text and "Геология" in text and "10:45–12:15" in text
+
+    os.utime(env / "cache.json", (time.time() + 10, time.time() + 10))
+    run(bot.changes_job(c))  # та же отмена второй раз не приходит
+    assert len(c.bot.sent) == 1

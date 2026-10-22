@@ -48,7 +48,7 @@ from telegram.ext import (Application, ApplicationHandlerStop, CallbackQueryHand
 import guard
 import i18n
 import my_commands as my
-from gubkin_api import CaptchaRequired, GubkinClient, GubkinError, normalize_code
+from gubkin_api import CaptchaRequired, GubkinClient, GubkinError, normalize_code, write_atomic
 from schedule import (_minutes, fetch_range, locate_room, semester_bounds, slim_week, to_csv, to_html,
                       to_ics, to_json, to_text)
 
@@ -877,6 +877,108 @@ async def _alert_admin(update: Update, key: str, text: str) -> None:
         log.warning("не удалось написать администратору: %s", e)
 
 
+# ---- уведомления об отменах и переносах
+
+CHANGES_FILE = DATA_DIR / "changes_seen.json"  # какие отмены/переносы уже видели: {id группы: {понедельник: [...]}}
+CHANGES_DAYS = 7          # следим за парами на неделю вперёд
+QUIET = (23 * 60, 7 * 60)  # ночью не пишем — сообщение придёт утром
+_changes_mtime: list = [None]
+
+
+def _change_events(lessons) -> dict[str, tuple]:
+    """Отмены, переносы и смены аудитории: {ключ: (вид, пара, пояснение)}."""
+    out = {}
+    for l in lessons:
+        found = [("cancel", "")] if l.cancelled else []
+        for n in l.notes:
+            if n.startswith("Перенесено"):
+                found.append(("move", n))
+            elif n.startswith("Аудитория:"):
+                found.append(("room", n))
+        for kind_, detail in found:
+            out[f"{l.date}|{l.start}|{l.subject}|{l.kind}|{l.subgroup}|{kind_}|{detail}"] = (kind_, l, detail)
+    return out
+
+
+def _change_text(code: str, events: list, lang: str) -> str:
+    parts = [i18n.t("chg_title", lang, code=code)]
+    for kind_, l, detail in sorted(events, key=lambda e: (e[1].date, e[1].start)):
+        when = f"{i18n.day_month(dt.date.fromisoformat(l.date), lang)}, {l.start}–{l.end}"
+        parts.append(f"{i18n.t('chg_' + kind_, lang)}: {when}\n{i18n.subject(l.subject, lang)}"
+                     + (f" ({i18n.kind(l.kind, lang)})" if l.kind else "")
+                     + (f"\n{i18n.note(detail, lang)}" if detail else ""))
+    return "\n\n".join(parts)
+
+
+def _monday(d: dt.date) -> str:
+    return (d - dt.timedelta(days=d.weekday())).isoformat()
+
+
+async def changes_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Ноутбук прислал новое расписание — ищем новые отмены и переносы и пишем тем, кто выбрал группу.
+    Неделя, которую бот видит впервые, ничего не присылает: это не изменение, а первое знакомство."""
+    try:
+        mtime = client.cache_file.stat().st_mtime
+    except (OSError, AttributeError):
+        return
+    now = dt.datetime.now(MSK)
+    now_min = now.hour * 60 + now.minute
+    if mtime == _changes_mtime[0] or now_min >= QUIET[0] or now_min < QUIET[1]:
+        return
+    try:
+        seen = json.loads(CHANGES_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        seen = None  # первый запуск — только запоминаем
+    users, chosen = _load_users(), _load_user_groups()
+    by_code: dict[str, list[str]] = {}
+    for uid, code in chosen.items():
+        if not (users.get(uid) or {}).get("blocked"):
+            by_code.setdefault(code, []).append(uid)
+    today = now.date()
+    start, end = today, today + dt.timedelta(days=CHANGES_DAYS - 1)
+    new_seen, sends = {}, []
+    for code, uids in by_code.items():
+        grp = _find_group(code)
+        if not grp or not grp.get("id"):
+            continue
+        old = (seen or {}).get(grp["id"]) or {}  # неделю или группу видим впервые — только запоминаем
+        new_seen[grp["id"]], fresh = {}, []
+        for wk in sorted({_monday(start + dt.timedelta(days=i)) for i in range(CHANGES_DAYS)}):
+            mon = dt.date.fromisoformat(wk)
+            try:  # недели может ещё не быть на сервере — тогда её пропускаем, помним прежнее
+                lessons, _ = await asyncio.to_thread(_fetch, max(mon, start), min(mon + dt.timedelta(days=6), end), grp)
+            except Exception:
+                if wk in old:
+                    new_seen[grp["id"]][wk] = old[wk]
+                continue
+            if guard.check_lessons(lessons):  # подозрительные данные — не рассылаем, помним прежнее
+                if wk in old:
+                    new_seen[grp["id"]][wk] = old[wk]
+                continue
+            events = _change_events(lessons)
+            fresh += [events[k] for k in events if wk in old and k not in old[wk]]
+            new_seen[grp["id"]][wk] = sorted(events)
+        if fresh:
+            sends.append((grp["code"], uids, fresh))
+    try:
+        write_atomic(CHANGES_FILE, json.dumps(new_seen, ensure_ascii=False))
+    except OSError:
+        log.warning("cannot save %s", CHANGES_FILE)
+        return
+    _changes_mtime[0] = mtime
+    for code, uids, fresh in sends:
+        log.info("изменения в расписании %s: %d, получателей %d", code, len(fresh), len(uids))
+        for uid in uids:
+            lang = i18n.get_lang(uid)
+            try:
+                await ctx.bot.send_message(int(uid), _change_text(code, fresh, lang))
+            except Forbidden:
+                _mark_blocked(uid, True)
+            except Exception:
+                log.warning("cannot send change to %s", uid)
+            await asyncio.sleep(0.05)
+
+
 async def sync_watch_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Только для offline-сервера: следит за тем, как ноутбук присылает расписание (sync.py),
     и пишет администратору, если нужна капча или расписание давно не обновлялось."""
@@ -1452,6 +1554,7 @@ def main() -> None:
     if client.offline:  # сервер: на сайт не ходим, следим за присылаемым расписанием
         log.info("offline: расписание берётся из cache.json, который присылает ноутбук (sync.py)")
         app.job_queue.run_repeating(sync_watch_job, interval=15 * 60, first=60)
+        app.job_queue.run_repeating(changes_job, interval=3 * 60, first=90)  # отмены и переносы
     else:
         app.job_queue.run_repeating(prefetch_job, interval=20 * 60, first=5)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
