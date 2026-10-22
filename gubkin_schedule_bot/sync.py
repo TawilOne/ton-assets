@@ -182,6 +182,8 @@ class CaptchaTooOften(CaptchaRequired):
 
 FULL = {"on": False}  # sync_full.bat: весь план за один запуск, медленно и с передышками
 PAUSE = 10 * 60      # передышка, когда сайт просит капчу слишком часто
+FAST, SLOW = 1.5, 3.0  # пауза между запросами: обычно и после капчи
+CALM = 100             # столько запросов без капчи — возвращаемся к обычному темпу
 CAPTCHA_GAP = 20  # меньше стольких запросов между капчами — сайт нас притормаживает, пора остановиться
 _captcha = {"solved": 0, "ok_since": 0}
 
@@ -194,6 +196,8 @@ def _with_captcha(interactive: bool, func, *args):
         try:
             result = func(*args)
             _captcha["ok_since"] += 1
+            if _captcha["ok_since"] == CALM:  # долго без капчи — снова обычный темп
+                bot.client.delay = FAST
             return result
         except CaptchaRequired:
             if not interactive:
@@ -211,7 +215,7 @@ def _with_captcha(interactive: bool, func, *args):
             solve_captcha()
             _captcha["solved"] += 1
             _captcha["ok_since"] = 0
-            bot.client.delay = max(bot.client.delay, 3.0)  # после капчи — помедленнее
+            bot.client.delay = SLOW  # после капчи — помедленнее, пока сайт не успокоится
 
 
 def _group_rows(rows) -> list[dict]:
@@ -315,6 +319,7 @@ def _save_failed(data: dict) -> None:
         pass
 
 
+RECENT = 45 * 60  # неделю, скачанную меньше 45 минут назад, в этот раз не перекачиваем
 FAR_WEEKS = 6  # дальние недели обновляем до стольких недель вперёд; ещё дальше — только если их нет
 FAR_AGE = 3 * 86400 - 4 * 3600  # дальние недели выбранных групп — раз в 3 дня (почти не меняются)
 
@@ -332,9 +337,10 @@ def plan(groups: list[dict], wanted: set[str], weeks: list[dt.date], this_monday
     others = [g for g in groups if g["code"] not in wanted]
     near = [this_monday + dt.timedelta(weeks=k) for k in range(3)]
     tasks = []
-    # 1) выбранные группы: текущая и 2 следующие недели — каждый раз (там бывают переносы)
+    # 1) выбранные группы: текущая и 2 следующие недели — каждый раз (там бывают переносы),
+    #    кроме только что скачанных: повторный запуск сразу после прерванного их не тратит
     for g in chosen:
-        tasks += [(m, g, True) for m in near if m in weeks]
+        tasks += [(m, g, True) for m in near if m in weeks and not ((_age(m, g["id"]) or RECENT) < RECENT)]
     # 2) остальные группы: одна неделя — та, которую будут смотреть: с понедельника по четверг текущая,
     #    с пятницы — следующая; если её нет или она старше суток. Сначала те, которых нет совсем
     today = today or dt.date.today()
@@ -425,7 +431,7 @@ def download(interactive: bool, srv: str) -> int:
     bot.client.s.trust_env = False
     _with_captcha(interactive, bot._ensure_group)
     bot.client.cache_ttl = 60  # то, что решили обновить, — берём с сайта, а не из кэша
-    bot.client.delay = 1.5     # частые запросы подряд сайт принимает за робота и просит капчу
+    bot.client.delay = FAST    # частые запросы подряд сайт принимает за робота и просит капчу
     today = dt.date.today()
     weeks = mondays(today)
     this_monday = today - dt.timedelta(days=today.weekday())
@@ -435,8 +441,7 @@ def download(interactive: bool, srv: str) -> int:
     bot.client.validate = _validator(_check_saved(), stats)
     wanted = wanted_codes(srv)
     bad_weeks = _load_failed()
-    if FULL["on"]:  # всё за раз: все недели семестра и все группы, но медленнее
-        bot.client.delay = 3.0
+    if FULL["on"]:  # всё за раз: все недели семестра и все группы (темп замедляется только после капчи)
         tasks = plan(groups, wanted, weeks, this_monday, failed=bad_weeks, today=today, far_weeks=len(weeks))
     else:
         tasks = plan(groups, wanted, weeks, this_monday, others_limit=150 if interactive else 60, failed=bad_weeks,

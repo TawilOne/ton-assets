@@ -312,9 +312,16 @@ def test_sync_plan_order(monkeypatch):
     # всё свежее — остальные группы не качаем, у выбранной — только ближние недели
     for m in weeks:
         for g in groups:
-            bot.client._cache[(m, g["id"])] = (time.time(), {})
+            bot.client._cache[(m, g["id"])] = (time.time() - 2 * 3600, {})
     tasks = sync.plan(groups, {"Б-26-02"}, weeks, MONDAY, today=tuesday)
     assert [(m, g["code"]) for m, g, _ in tasks] == [(MONDAY + dt.timedelta(weeks=k), "Б-26-02") for k in range(3)]
+    # только что скачанные ближние недели повторный запуск не перекачивает
+    for k in range(3):
+        bot.client._cache[(MONDAY + dt.timedelta(weeks=k), "1")] = (time.time() - 60, {})
+    assert sync.plan(groups, {"Б-26-02"}, weeks, MONDAY, today=tuesday) == []
+    for m in weeks:
+        for g in groups:
+            bot.client._cache[(m, g["id"])] = (time.time(), {})
     # дальние недели выбранной группы — раз в 3 дня: через сутки ещё не качаем, через 3 дня — качаем
     far = [m for m in weeks if m > MONDAY + dt.timedelta(weeks=2)]
     for m in far:
