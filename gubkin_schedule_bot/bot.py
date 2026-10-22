@@ -885,6 +885,10 @@ QUIET = (23 * 60, 7 * 60)  # ночью не пишем — сообщение �
 _changes_mtime: list = [None]
 
 
+def _msk_now() -> dt.datetime:
+    return dt.datetime.now(MSK)
+
+
 def _change_events(lessons) -> dict[str, tuple]:
     """Отмены, переносы и смены аудитории: {ключ: (вид, пара, пояснение)}."""
     out = {}
@@ -921,7 +925,7 @@ async def changes_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         mtime = client.cache_file.stat().st_mtime
     except (OSError, AttributeError):
         return
-    now = dt.datetime.now(MSK)
+    now = _msk_now()
     now_min = now.hour * 60 + now.minute
     if mtime == _changes_mtime[0] or now_min >= QUIET[0] or now_min < QUIET[1]:
         return
@@ -945,8 +949,10 @@ async def changes_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         new_seen[grp["id"]], fresh = {}, []
         for wk in sorted({_monday(start + dt.timedelta(days=i)) for i in range(CHANGES_DAYS)}):
             mon = dt.date.fromisoformat(wk)
+            # неделю берём и запоминаем целиком: иначе, когда окно сдвинется на новый день, его старые
+            # отмены показались бы новыми
             try:  # недели может ещё не быть на сервере — тогда её пропускаем, помним прежнее
-                lessons, _ = await asyncio.to_thread(_fetch, max(mon, start), min(mon + dt.timedelta(days=6), end), grp)
+                lessons, _ = await asyncio.to_thread(_fetch, mon, mon + dt.timedelta(days=6), grp)
             except Exception:
                 if wk in old:
                     new_seen[grp["id"]][wk] = old[wk]
@@ -956,7 +962,10 @@ async def changes_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                     new_seen[grp["id"]][wk] = old[wk]
                 continue
             events = _change_events(lessons)
-            fresh += [events[k] for k in events if wk in old and k not in old[wk]]
+            # пишем только о том, что ещё впереди: окно — сегодня и CHANGES_DAYS-1 дней, прошедшие пары — нет
+            fresh += [ev for k, ev in events.items() if wk in old and k not in old[wk]
+                      and start <= dt.date.fromisoformat(ev[1].date) <= end
+                      and not (ev[1].date == start.isoformat() and _minutes(ev[1].end or ev[1].start) <= now_min)]
             new_seen[grp["id"]][wk] = sorted(events)
         if fresh:
             sends.append((grp["code"], uids, fresh))

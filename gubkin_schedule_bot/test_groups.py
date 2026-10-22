@@ -1021,6 +1021,7 @@ def test_changes_job_notifies_on_new_cancellation(env, monkeypatch):
     monkeypatch.setattr(bot, "CHANGES_FILE", env / "changes_seen.json")
     monkeypatch.setattr(bot, "QUIET", (24 * 60, 0))
     monkeypatch.setattr(bot, "_changes_mtime", [None])
+    monkeypatch.setattr(bot, "_msk_now", lambda: dt.datetime.combine(TODAY, dt.time(8, 0), bot.MSK))  # до пары
     bot._set_user_group(5, "ГМ-26-11")
     bot._set_user_group(6, "ГМ-26-12")
     c = ctx()
@@ -1043,3 +1044,45 @@ def test_changes_job_notifies_on_new_cancellation(env, monkeypatch):
     os.utime(env / "cache.json", (time.time() + 10, time.time() + 10))
     run(bot.changes_job(c))  # та же отмена второй раз не приходит
     assert len(c.bot.sent) == 1
+
+
+def test_changes_job_no_false_alarm_when_window_moves(env, monkeypatch):
+    """Отмена, которая уже была вчера, не должна прийти сегодня как «новая», когда её день вошёл в окно."""
+    if TODAY.weekday() == 0:
+        pytest.skip("вчера — прошлая неделя")
+    monkeypatch.setattr(bot, "CHANGES_FILE", env / "changes_seen.json")
+    monkeypatch.setattr(bot, "QUIET", (24 * 60, 0))
+    monkeypatch.setattr(bot, "_changes_mtime", [None])
+    monkeypatch.setattr(bot, "CHANGES_DAYS", 1)  # окно — один день
+    cache = json.loads((env / "cache.json").read_text(encoding="utf-8"))
+    cache[f"{MONDAY.isoformat()}|10706"][1]["rows"]["organizations"][0]["lessons"][0]["isCanceled"] = True
+    (env / "cache.json").write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
+    bot._set_user_group(5, "ГМ-26-11")
+    c = ctx()
+    c.bot = FakeBot()
+    noon = dt.datetime.combine(TODAY, dt.time(8, 0), bot.MSK)
+    monkeypatch.setattr(bot, "_msk_now", lambda: noon - dt.timedelta(days=1))
+    run(bot.changes_job(c))  # вчера: запомнили неделю
+    run(bot.changes_job(c))
+    monkeypatch.setattr(bot, "_changes_mtime", [None])
+    monkeypatch.setattr(bot, "_msk_now", lambda: noon)  # сегодня: та же отмена попала в окно
+    run(bot.changes_job(c))
+    assert c.bot.sent == []
+
+
+def test_changes_job_skips_lessons_already_over(env, monkeypatch):
+    """Пару, которая уже закончилась, отменять поздно — о ней не пишем."""
+    monkeypatch.setattr(bot, "CHANGES_FILE", env / "changes_seen.json")
+    monkeypatch.setattr(bot, "QUIET", (24 * 60, 0))
+    monkeypatch.setattr(bot, "_changes_mtime", [None])
+    monkeypatch.setattr(bot, "_msk_now", lambda: dt.datetime.combine(TODAY, dt.time(15, 0), bot.MSK))
+    bot._set_user_group(5, "ГМ-26-11")
+    c = ctx()
+    c.bot = FakeBot()
+    run(bot.changes_job(c))
+    cache = json.loads((env / "cache.json").read_text(encoding="utf-8"))
+    cache[f"{MONDAY.isoformat()}|10706"][1]["rows"]["organizations"][0]["lessons"][0]["isCanceled"] = True
+    (env / "cache.json").write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
+    os.utime(env / "cache.json", (time.time() + 5, time.time() + 5))
+    run(bot.changes_job(c))  # пара сегодня 10:45–12:15, сейчас 15:00
+    assert c.bot.sent == []
