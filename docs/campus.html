@@ -25,11 +25,12 @@
           background: var(--surface-2); color: var(--text); font-size: 20px; }
   h1 { margin: 0; font-size: 24px; font-weight: 800; letter-spacing: -.02em; }
   .sub { color: var(--muted); font-size: 13px; }
-  .stage { position: relative; flex: 1 1 auto; min-height: 120px; border-radius: 20px; overflow: hidden;
+  .stage { position: relative; flex: 1 1 0; min-height: 110px; border-radius: 20px; overflow: hidden;
            border: 1px solid var(--line); background: #070708; }
   .inner { position: absolute; left: 0; top: 0; transform-origin: 0 0; will-change: transform; }
   .inner svg { display: block; width: 100%; height: 100%; }
   .zoom { position: absolute; right: 10px; bottom: 10px; display: flex; flex-direction: column; gap: 6px; }
+  .stage.low .zoom { flex-direction: row; }
   .zoom button { width: 40px; height: 40px; border-radius: 13px; border: 1px solid var(--line);
                  background: rgba(23,23,26,.88); color: var(--text); font-size: 18px;
                  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
@@ -55,7 +56,7 @@
   .campus-svg .lbl.small { font-size: 15px; text-anchor: start; fill: #ff6060; }
   /* план здания — панель снизу, открывается нажатием на здание */
   /* панель — под картой, в общем потоке: карта над ней уменьшается и не перекрывается */
-  .sheet { display: none; flex: 0 1 auto; height: 56vh; min-height: 0; flex-direction: column; margin-top: 12px;
+  .sheet { display: none; flex: 0 0 auto; flex-direction: column; margin-top: 12px;
            padding: 14px; border-radius: 20px; background: var(--surface); border: 1px solid var(--line); }
   .sheet.open { display: flex; animation: up .25s ease; }
   @keyframes up { from { transform: translateY(16px); opacity: 0; } to { transform: none; opacity: 1; } }
@@ -69,13 +70,22 @@
   .ftab { flex: 0 0 auto; min-width: 40px; height: 36px; padding: 0 10px; border-radius: 11px; border: 1px solid var(--line);
           background: var(--surface-2); color: var(--muted); font: 700 15px Inter, system-ui, sans-serif; }
   .ftab.on { background: #fff; color: #000; }
+  /* план — как в «Где пара»: весь этаж по ширине, «+» или два пальца — крупно, с номерами */
+  .plan-wrap { position: relative; flex: 0 0 auto; }
   .plan { overflow: auto; border-radius: 16px; border: 1px solid var(--line); background: #070708; touch-action: pan-x pan-y;
-          -webkit-overflow-scrolling: touch; min-height: 0; }
-  .plan { display: flex; }
-  .plan-inner { flex: 0 0 auto; margin: auto; }  /* размер задаёт fitPlan(): план во всю высоту рамки */
+          -webkit-overflow-scrolling: touch; scrollbar-width: none; max-height: 38vh; }
+  .plan::-webkit-scrollbar { display: none; }
+  .plan-inner { width: 100%; transition: width .35s ease; }
+  .plan.big .plan-inner { width: 320%; }
+  .plan .floor-svg .num { opacity: 0; transition: opacity .3s; }
+  .plan.big .floor-svg .num { opacity: 1; }
+  .plan .floor-svg .leaf { display: none; }
+  .plan.big .floor-svg .leaf { display: inline; }
+  .pzoom { position: absolute; right: 10px; bottom: 10px; width: 36px; height: 36px; border-radius: 12px;
+           border: 1px solid var(--line); background: rgba(23,23,26,.85); color: var(--text); font-size: 17px;
+           backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
   .hint { color: var(--muted); font-size: 12px; margin-top: 8px; }
   .sheet-head, .ftabs, .hint { flex: 0 0 auto; }
-  .plan { flex: 1 1 auto; }
   .noplan { color: var(--muted); padding: 22px 4px; text-align: center; }
   /* схема этажа (plans/*.svg) — те же цвета, что в «Где пара» */
   .floor-svg { display: block; width: 100%; height: auto; }
@@ -107,7 +117,7 @@
 <div class="sheet" id="sheet">
   <div class="sheet-head"><h2 id="sheet-t"></h2><span id="sheet-f"></span><button class="close" id="close" aria-label="×">✕</button></div>
   <div class="ftabs" id="ftabs"></div>
-  <div class="plan" id="plan"></div>
+  <div class="plan-wrap"><div class="plan" id="plan"></div><button class="pzoom" id="pzoom" aria-label="+">+</button></div>
   <div class="hint" id="hint"></div>
 </div>
 
@@ -143,6 +153,7 @@ let svgW = 700, svgH = 770, base = 1, s = 1, tx = 0, ty = 0, selected = params.g
 
 function fit() {  // вся карта целиком посередине
   const W = stage.clientWidth, H = stage.clientHeight;
+  stage.classList.toggle("low", H < 180);  // карта низкая (открыт план) — кнопки «+ − ⟲» в ряд
   base = Math.min(W / svgW, H / svgH);
   inner.style.width = svgW * base + "px"; inner.style.height = svgH * base + "px";
   s = 1; tx = (W - svgW * base) / 2; ty = (H - svgH * base) / 2; apply();
@@ -212,19 +223,29 @@ const floorName = n => n === 1.5 ? L3("между 1 и 2 этажом", "mezzani
   : n === 0 ? L3("цокольный этаж", "lower ground floor", "demi-sous-sol") : L3(`${n} этаж`, `floor ${n}`, `étage ${n}`);
 const sheet = document.getElementById("sheet");
 document.getElementById("close").onclick = () => { if (selected) select(selected); };
-// план — на всю высоту рамки, но номера не мельче ~7 px и не крупнее ~14 px; остальное — листать
-function fitPlan() {
-  const plan = document.getElementById("plan"), inner = plan.querySelector(".plan-inner"), svg = inner && inner.querySelector("svg");
-  if (!svg) return;
-  const vb = (svg.getAttribute("viewBox") || "").split(/\s+/).map(Number);
-  if (vb.length !== 4) return;
-  const W = plan.clientWidth, H = plan.clientHeight;
-  const k = Math.min(Math.max(H / vb[3], W / vb[2], 0.75), 1.6);
-  inner.style.width = vb[2] * k + "px";
-  svg.style.width = "100%"; svg.style.height = "auto";
-  plan.scrollLeft = (plan.scrollWidth - W) / 2; plan.scrollTop = (plan.scrollHeight - H) / 2;
+// увеличение плана — как на основной карте «Где пара»
+let planZoom = false;
+const planEl = document.getElementById("plan"), pzoom = document.getElementById("pzoom");
+function setPlanZoom(on) {
+  planZoom = on;
+  planEl.classList.toggle("big", on);
+  pzoom.textContent = on ? "−" : "+";
+  if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred("light");
+  setTimeout(() => { planEl.scrollLeft = (planEl.scrollWidth - planEl.clientWidth) / 2;
+                     planEl.scrollTop = (planEl.scrollHeight - planEl.clientHeight) / 2; }, 360);
 }
-window.addEventListener("resize", fitPlan);
+pzoom.onclick = () => setPlanZoom(!planZoom);
+{ // два пальца на плане: развели — крупно, свели — весь этаж
+  let start = 0, k = 1;
+  const d = t => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+  planEl.addEventListener("touchstart", e => { if (e.touches.length === 2) { start = d(e.touches); k = 1; } }, { passive: true });
+  planEl.addEventListener("touchmove", e => { if (e.touches.length === 2 && start) { e.preventDefault(); k = d(e.touches) / start; } }, { passive: false });
+  planEl.addEventListener("touchend", e => {
+    if (!start || e.touches.length) return;
+    if (k > 1.15 && !planZoom) setPlanZoom(true); else if (k < 0.87 && planZoom) setPlanZoom(false);
+    start = 0;
+  });
+}
 function openSheet(b) {
   document.getElementById("sheet-t").textContent = NAMES[b];
   const plan = document.getElementById("plan"), tabs = document.getElementById("ftabs");
@@ -232,7 +253,7 @@ function openSheet(b) {
   sheet.classList.add("open");
   if (!fl.length) {
     tabs.innerHTML = ""; document.getElementById("sheet-f").textContent = ""; document.getElementById("hint").textContent = "";
-    plan.className = "plan";
+    plan.className = "plan"; pzoom.style.display = "none";
     plan.innerHTML = `<div class="noplan">${L3("План этого здания пока не добавлен",
       "The plan of this building has not been added yet", "Le plan de ce bâtiment n'a pas encore été ajouté")}</div>`;
     return;
@@ -246,11 +267,11 @@ function openSheet(b) {
   const on = tabs.querySelector(".ftab.on");  // выбранный этаж — в зоне видимости ряда кнопок
   if (on) tabs.scrollLeft = on.offsetLeft - (tabs.clientWidth - on.offsetWidth) / 2;
   document.getElementById("sheet-f").textContent = floorName(f);
-  document.getElementById("hint").textContent = L3("Листайте план пальцем, чтобы увидеть все кабинеты",
-    "Swipe the plan to see all rooms", "Faites glisser le plan pour voir toutes les salles");
-  plan.className = "plan " + PLAN_OF[b];
+  document.getElementById("hint").textContent = L3("«+» или два пальца — крупнее, с номерами кабинетов",
+    "Tap + or pinch to zoom in and see room numbers", "Touchez + ou pincez pour agrandir et voir les numéros");
+  plan.className = "plan " + PLAN_OF[b] + (planZoom ? " big" : ""); pzoom.style.display = "";
   const id = `${PLAN_OF[b]}-${f}`;
-  const show = t => { if (floorShown[b] === f && selected === b) { plan.innerHTML = `<div class="plan-inner">${t}</div>`; fitPlan(); } };
+  const show = t => { if (floorShown[b] === f && selected === b) { plan.innerHTML = `<div class="plan-inner">${t}</div>`; } };
   if (svgCache[id]) show(svgCache[id]);
   else {
     plan.innerHTML = `<div class="noplan">…</div>`;
