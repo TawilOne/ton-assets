@@ -89,8 +89,7 @@ def _ensure_group() -> None:
     _group.update(id=g["id"], code=g.get("code") or GROUP_CODE, faculty=f.get("name", ""), faculty_id=f.get("id"))
     log.info("group %s id=%s faculty=%s", _group["code"], _group["id"], _group["faculty"])
     try:
-        GROUP_FILE.write_text(json.dumps({**_group, "code_wanted": GROUP_CODE}, ensure_ascii=False),
-                              encoding="utf-8")
+        write_atomic(GROUP_FILE, json.dumps({**_group, "code_wanted": GROUP_CODE}, ensure_ascii=False))
     except OSError:
         pass
 
@@ -167,9 +166,11 @@ def _faculty_groups() -> list[dict]:
                     code = normalize_code(str(g.get("code") or ""))
                     if g.get("id") and code and code not in found:
                         found[code] = {"id": str(g["id"]), "code": code, "fac": f.get("key") or DEFAULT_FACULTY}
+            _groups_cache.update(mtime=mtime, list=[found[c] for c in sorted(found)])
         except (OSError, ValueError, AttributeError, TypeError):
-            found = {}
-        _groups_cache.update(mtime=mtime, list=[found[c] for c in sorted(found)])
+            # файл не прочитался (нет его или битый) — оставляем прежний список и попробуем в следующий раз;
+            # раньше здесь запоминался пустой список, и у всех «пропадала» выбранная группа до нового файла
+            log.warning("cannot read %s, keeping previous group list", GROUPS_FILE)
     groups = list(_groups_cache["list"])
     if not any(g["code"] == GROUP_CODE for g in groups):
         groups.append(_default_group())
@@ -207,7 +208,7 @@ def _set_user_group(user_id, code: str) -> None:
         data = _load_user_groups()
         data[str(user_id)] = code
         try:
-            USER_GROUPS_FILE.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            write_atomic(USER_GROUPS_FILE, json.dumps(data, ensure_ascii=False))
         except OSError:
             log.warning("cannot save %s", USER_GROUPS_FILE)
 
@@ -219,8 +220,7 @@ def _migrate_user_groups() -> None:
         return
     old = set(_load_users()) | set(_load_subs())
     try:
-        USER_GROUPS_FILE.write_text(json.dumps({uid: GROUP_CODE for uid in sorted(old)}, ensure_ascii=False),
-                                    encoding="utf-8")
+        write_atomic(USER_GROUPS_FILE, json.dumps({uid: GROUP_CODE for uid in sorted(old)}, ensure_ascii=False))
         log.info("выбор групп: %d прежних пользователей получили группу %s", len(old), GROUP_CODE)
     except OSError:
         log.warning("cannot save %s", USER_GROUPS_FILE)
@@ -708,7 +708,7 @@ def _load_subs() -> dict[str, dict]:
 
 def _save_subs(subs: dict) -> None:
     try:
-        SUBSCRIBERS_FILE.write_text(json.dumps(subs, ensure_ascii=False), encoding="utf-8")
+        write_atomic(SUBSCRIBERS_FILE, json.dumps(subs, ensure_ascii=False))
     except OSError:
         log.warning("cannot save %s", SUBSCRIBERS_FILE)
 
@@ -988,6 +988,17 @@ async def changes_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
             await asyncio.sleep(0.05)
 
 
+async def on_error(update: object, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Непойманная ошибка в обработчике: пишем в журнал, а человеку — что что-то пошло не так
+    (раньше он просто не получал ответа)."""
+    log.error("ошибка при обработке сообщения", exc_info=ctx.error)
+    if isinstance(update, Update) and update.effective_message and update.effective_user:
+        try:
+            await update.effective_message.reply_text(i18n.t("oops", _lang(update)))
+        except Exception:
+            pass
+
+
 async def sync_watch_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Только для offline-сервера: следит за тем, как ноутбук присылает расписание (sync.py),
     и пишет администратору, если нужна капча или расписание давно не обновлялось."""
@@ -1194,7 +1205,7 @@ async def track_user(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             for old in sorted(days)[:-60]:  # храним 60 последних дней
                 del days[old]
         try:
-            USERS_FILE.write_text(json.dumps(users, ensure_ascii=False, indent=1), encoding="utf-8")
+            write_atomic(USERS_FILE, json.dumps(users, ensure_ascii=False, indent=1))
         except OSError:
             log.warning("cannot save users.json")
     admin = _admin_id()
@@ -1234,7 +1245,7 @@ def _mark_blocked(user_id, blocked: bool, when: str | None = None) -> None:
         else:
             u.pop("blocked", None)
         try:
-            USERS_FILE.write_text(json.dumps(users, ensure_ascii=False, indent=1), encoding="utf-8")
+            write_atomic(USERS_FILE, json.dumps(users, ensure_ascii=False, indent=1))
         except OSError:
             log.warning("cannot save users.json")
 
@@ -1527,6 +1538,7 @@ def main() -> None:
         builder = builder.proxy(proxy).get_updates_proxy(proxy)
         log.info("Telegram via proxy %s", proxy.split("@")[-1])
     app = builder.post_init(_set_commands).build()
+    app.add_error_handler(on_error)
     _migrate_user_groups()
     # group=-1: срабатывает раньше остальных обработчиков на каждое сообщение
     app.add_handler(TypeHandler(Update, track_user), group=-1)

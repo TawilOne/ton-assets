@@ -93,13 +93,16 @@ class GubkinClient:
     def _load_cache(self) -> None:
         if not self.cache_file:
             return
-        try:
-            self._cache_mtime = self.cache_file.stat().st_mtime
+        try:  # читаем целиком и только потом подменяем: битый файл не стирает то, что уже в памяти
+            mtime = self.cache_file.stat().st_mtime
+            loaded = {}
             for k, (ts, data) in json.loads(self.cache_file.read_text(encoding="utf-8")).items():
                 monday, group = k.split("|", 1)
-                self._cache[(dt.date.fromisoformat(monday), group)] = (ts, data)
+                loaded[(dt.date.fromisoformat(monday), group)] = (ts, data)
         except (OSError, ValueError, TypeError):
-            pass
+            return
+        self._cache = loaded
+        self._cache_mtime = mtime
 
     def _save_cache(self) -> None:
         if not self.cache_file:
@@ -221,7 +224,6 @@ class GubkinClient:
     def _reload_if_changed(self) -> None:
         try:  # ноутбук прислал новый файл — перечитываем
             if self.cache_file.stat().st_mtime != self._cache_mtime:
-                self._cache.clear()
                 self._load_cache()
         except (OSError, AttributeError):
             pass

@@ -1086,3 +1086,15 @@ def test_changes_job_skips_lessons_already_over(env, monkeypatch):
     os.utime(env / "cache.json", (time.time() + 5, time.time() + 5))
     run(bot.changes_job(c))  # пара сегодня 10:45–12:15, сейчас 15:00
     assert c.bot.sent == []
+
+
+def test_broken_files_dont_wipe_what_is_known(env, monkeypatch):
+    """Битый groups.json или cache.json не стирает уже известные группы и расписание."""
+    assert bot._find_group("АА-26-01")
+    (env / "groups.json").write_text("{обрывок", encoding="utf-8")
+    os.utime(env / "groups.json", (time.time() + 5, time.time() + 5))
+    assert bot._find_group("АА-26-01"), "группа пропала из-за битого файла"
+    assert bot.client.has_group("20001")
+    (env / "cache.json").write_text("{обрывок", encoding="utf-8")
+    os.utime(env / "cache.json", (time.time() + 5, time.time() + 5))
+    assert bot.client.has_group("20001"), "расписание пропало из-за битого файла"

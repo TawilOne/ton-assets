@@ -45,7 +45,9 @@ def set_lang(user_id, lang: str) -> None:
     data = _load()
     data[str(user_id)] = lang
     try:
-        LANG_FILE.write_text(json.dumps(data), encoding="utf-8")
+        tmp = LANG_FILE.with_name(LANG_FILE.name + ".tmp")  # целиком или никак: обрывок стёр бы языки всех
+        tmp.write_text(json.dumps(data), encoding="utf-8")
+        tmp.replace(LANG_FILE)
     except OSError:
         pass
 
@@ -288,6 +290,9 @@ TEXT = {
     "file_txt": {"ru": "текст", "en": "plain text", "fr": "texte"},
     "today": {"ru": "сегодня", "en": "today", "fr": "aujourd'hui"},
     "tomorrow": {"ru": "завтра", "en": "tomorrow", "fr": "demain"},
+    "oops": {"ru": "😕 Что-то пошло не так. Попробуйте ещё раз чуть позже.",
+             "en": "😕 Something went wrong. Please try again a bit later.",
+             "fr": "😕 Un problème est survenu. Réessayez un peu plus tard."},
     "cancelled": {"ru": "пара отменена", "en": "class cancelled", "fr": "cours annulé"},
     "chg_title": {"ru": "🔔 Изменение в расписании · {code}", "en": "🔔 Timetable change · {code}",
                   "fr": "🔔 Changement d'emploi du temps · {code}"},

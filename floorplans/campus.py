@@ -127,8 +127,8 @@ def build():
     labels = {"main": ("Главный корпус", "1", 660, 548), "sachok": ("Сачок", "7", 662, 630)}
     centers = {"main": (660, 518)}
     for b, (name, num, rs) in BUILDINGS.items():
-        xs = [v for q in rs for v in (q[0], q[2])]
-        ys = [v for q in rs for v in (q[1], q[3])]
+
+
         big = max(rs, key=lambda q: (q[2] - q[0]) * (q[3] - q[1]))
         cx, cy = (big[0] + big[2]) / 2, (big[1] + big[3]) / 2
         centers[b] = (cx, cy)
