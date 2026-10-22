@@ -44,7 +44,7 @@ BUILDINGS = {
 GALLERIES = [
     (779, 400, 793, 465),    # ДК → главный корпус
     (828, 235, 842, 290),    # ДК → 2 корпус
-    (793, 422, 944, 436),    # библиотека → переход ДК — главный корпус
+    (779, 414, 946, 428),    # библиотека → переход ДК — главный корпус (входит в боковую стену библиотеки)
 ]
 PARKING = [(500, 262, 618, 445), (500, 445, 776, 462)]
 GARDEN = [(624, 250, 756, 440)]
@@ -104,8 +104,21 @@ def build():
     shapes["main"] = [box(a[0], a[1], b[0], b[1]) for a, b in rects] + [Polygon(p) for p in polys]
     for b, sh in shapes.items():
         parts.append(f'<path class="bld" data-b="{b}" fill-rule="evenodd" d="{outline(sh)}"/>')
-    for g in GALLERIES:
-        parts.append(r(*g, "gallery"))
+    # переходы — одним контуром без швов; там, где переход входит в здание, стена здания открыта
+    gal = [box(*g) for g in GALLERIES]
+    parts.append(f'<path class="gallery" fill-rule="evenodd" d="{outline(gal)}"/>')
+    inside = unary_union(gal).buffer(-1.2, join_style=2)  # заливка без обводки поверх стен зданий
+    for g in getattr(inside, "geoms", [inside]):
+        d = "M" + "L".join(f"{x:.1f} {y:.1f}" for x, y in g.exterior.coords[:-1]) + "Z"
+        parts.append(f'<path class="gallery-open" d="{d}"/>')
+    ends = []
+    for g in GALLERIES:  # концы переходов заходят в здания на 1.5 — эти кусочки перекрывают стену
+        for b, sh in shapes.items():
+            hit = box(*g).intersection(unary_union(sh))
+            if not hit.is_empty and hit.area > 0:
+                x0_, y0_, x1_, y1_ = hit.bounds
+                ends.append(r(x0_, y0_, x1_, y1_, "gallery-open"))
+    parts.extend(ends)
     # вход
     ex, ey = ENTRANCE
     parts.append(f'<path class="entry" d="M{ex - 7} {ey + 22}L{ex} {ey + 8}L{ex + 7} {ey + 22}"/>')
