@@ -492,6 +492,7 @@ def download(interactive: bool, srv: str) -> int:
             if isinstance(e, GubkinError):  # сайт ответил ошибкой — запомним, чтобы не спрашивать каждый раз
                 bad_weeks[f"{mon.isoformat()}|{g['id']}"] = time.time()
 
+    started = time.monotonic()
     in_a_row = 0  # неудач подряд
     for i, (mon, g, chosen) in enumerate(tasks, 1):
         if deadline is not None and time.monotonic() > deadline:
@@ -525,7 +526,12 @@ def download(interactive: bool, srv: str) -> int:
         no_link = failed.get((mon, g["code"], chosen)) in NO_LINK
         in_a_row = in_a_row + 1 if no_link else 0
         if interactive:
-            print(f"\r  {i}/{len(tasks)}  {g['code']:<14}", end="", flush=True)
+            # скорость и сколько примерно осталось — по последним запросам, без пауз на капчу
+            took = time.monotonic() - started
+            left = (len(tasks) - i) * took / i if i else 0
+            eta = f"≈{left / 3600:.1f} ч" if left >= 5400 else f"≈{max(1, round(left / 60))} мин"
+            print(f"\r  {i}/{len(tasks)}  {g['code']:<14} {took / i:4.1f} с/неделя, осталось {eta}   ",
+                  end="", flush=True)
     if interactive and tasks:
         print()
     # сайт иногда не отвечает на первые запросы (перед капчей) — выбранным группам даём второй шанс
