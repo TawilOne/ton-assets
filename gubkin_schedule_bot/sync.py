@@ -299,6 +299,20 @@ def wanted_codes(srv: str) -> set[str]:
     return codes
 
 
+def active_codes(srv: str) -> set[str] | None:
+    """Выбранные группы, которые кто-то открывал за последние 2 недели (active_groups.py на сервере).
+    None — узнать не вышло: тогда считаем «живыми» все выбранные."""
+    try:
+        r = ssh([srv, f"python3 {REMOTE}/active_groups.py"])
+        codes = json.loads(r.stdout.decode("utf-8", errors="replace")) if r.returncode == 0 else None
+        if isinstance(codes, list):
+            return {normalize_code(str(c)) for c in codes} | {bot.GROUP_CODE}
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError):
+        pass
+    say("не удалось узнать, какие группы активны, — дальние недели качаю всем выбранным")
+    return None
+
+
 def _age(mon: dt.date, gid) -> float | None:
     hit = bot.client._cache.get((mon, str(gid)))
     return None if hit is None else time.time() - hit[0]
@@ -326,7 +340,8 @@ FAR_AGE = 3 * 86400 - 4 * 3600  # дальние недели выбранных
 
 def plan(groups: list[dict], wanted: set[str], weeks: list[dt.date], this_monday: dt.date,
          others_limit: int | None = None, failed: dict | None = None,
-         today: dt.date | None = None, far_weeks: int | None = None) -> list[tuple]:
+         today: dt.date | None = None, far_weeks: int | None = None,
+         active: set[str] | None = None) -> list[tuple]:
     """Что скачать в этот раз, по порядку важности: [(понедельник, группа, выбрана ли)].
     others_limit — сколько недель невыбранных групп брать за раз (по расписанию — порциями,
     чтобы не делать сотню запросов подряд и не нарваться на капчу).
@@ -353,10 +368,13 @@ def plan(groups: list[dict], wanted: set[str], weeks: list[dt.date], this_monday
                 stale.append((age is not None, k, -(age or 0), m, g))
     stale.sort(key=lambda x: x[:3])
     tasks += [(m, g, False) for *_, m, g in stale[:others_limit]]
-    # 3) выбранные группы: остальные недели семестра — будущие раз в 3 дня, прошедшие — только если их нет
+    # 3) выбранные группы: будущие недели семестра — раз в 3 дня. Только «живым» группам (active — их
+    #    открывали за 2 недели), прошедшие недели не качаем вовсе: они нужны лишь для /stats и /all
     for g in chosen:
+        if active is not None and g["code"] not in active:
+            continue
         for m in weeks:
-            if m in near:
+            if m in near or m < this_monday:
                 continue
             age = _age(m, g["id"])
             err = failed.get(f"{m.isoformat()}|{g['id']}")
@@ -440,12 +458,14 @@ def download(interactive: bool, srv: str) -> int:
     stats = {"suspicious": 0, "examples": []}
     bot.client.validate = _validator(_check_saved(), stats)
     wanted = wanted_codes(srv)
+    active = active_codes(srv)
     bad_weeks = _load_failed()
     if FULL["on"]:  # всё за раз: все недели семестра и все группы (темп замедляется только после капчи)
-        tasks = plan(groups, wanted, weeks, this_monday, failed=bad_weeks, today=today, far_weeks=len(weeks))
+        tasks = plan(groups, wanted, weeks, this_monday, failed=bad_weeks, today=today, far_weeks=len(weeks),
+                     active=active)
     else:
         tasks = plan(groups, wanted, weeks, this_monday, others_limit=150 if interactive else 60, failed=bad_weeks,
-                     today=today)
+                     today=today, active=active)
     say(f"групп: {len(groups)}, выбраны пользователями: {len(wanted & {g['code'] for g in groups})}, "
         f"запросов в плане: {len(tasks)}")
     # по расписанию задача Windows живёт не дольше 15 минут; вручную — качаем, сколько нужно

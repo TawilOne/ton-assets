@@ -307,8 +307,8 @@ def test_sync_plan_order(monkeypatch):
     tasks_sat = sync.plan(groups, {"Б-26-02"}, weeks, MONDAY, today=saturday)
     nxt = MONDAY + dt.timedelta(weeks=1)
     assert [(m, g["code"]) for m, g, c in tasks_sat if not c] == [(nxt, "А-26-01"), (nxt, "В-25-01")]
-    rest = [m for m, g, chosen in tasks[3:] if chosen]
-    assert len(rest) == len(weeks) - 3 and all(g["code"] == "Б-26-02" for _, g, c in tasks if c)
+    rest = [m for m, g, chosen in tasks[3:] if chosen]  # дальше — только будущие недели, прошедшие не качаем
+    assert rest == [m for m in weeks if m > MONDAY + dt.timedelta(weeks=2)] and all(g["code"] == "Б-26-02" for _, g, c in tasks if c)
     # всё свежее — остальные группы не качаем, у выбранной — только ближние недели
     for m in weeks:
         for g in groups:
@@ -399,7 +399,7 @@ def test_sync_end_to_end(tmp_path, monkeypatch):
     cache = json.loads(pushed["cache.json"])
     weeks = sync.mondays(dt.date.today())
     chosen = {k for k in cache if k.split("|")[1] in ("10706", "10707", "20001")}
-    assert len(chosen) == 3 * len(weeks)  # выбранные группы (обоих факультетов) — весь семестр
+    assert len(chosen) == 3 * len([m for m in weeks if m >= MONDAY])  # выбранные группы — семестр с этой недели
     others = {k.split("|")[1] for k in cache} - {"10706", "10707", "20001"}
     assert others == {"10600", "10500", "10800", "20002", "20003"}
     assert all(len([k for k in cache if k.endswith("|" + g)]) == 1 for g in others)  # остальные — 1 неделя
@@ -505,19 +505,32 @@ def test_sync_faculty_missing_on_site(tmp_path, monkeypatch):
 
 
 def test_sync_skips_weeks_the_site_refuses(monkeypatch):
-    """Прошедшая неделя, на которую сайт ответил ошибкой 500, не спрашивается при каждом запуске."""
+    """Неделя, на которую сайт ответил ошибкой 500, не спрашивается при каждом запуске (сутки);
+    прошедшие недели не качаются вовсе — они нужны только для /stats и /all."""
     monkeypatch.setattr(bot, "client", GubkinClient())
     weeks = sync.mondays(TODAY)
     g = {"id": "1", "code": "А-26-01"}
     past, future = weeks[0], weeks[-1]
     all_tasks = [m for m, _, _ in sync.plan([g], {"А-26-01"}, weeks, MONDAY)]
-    assert past in all_tasks and future in all_tasks
-    failed = {f"{past.isoformat()}|1": time.time() - 3 * 86400, f"{future.isoformat()}|1": time.time() - 3600}
+    assert past not in all_tasks and future in all_tasks
+    failed = {f"{future.isoformat()}|1": time.time() - 3600}
     tasks = [m for m, _, _ in sync.plan([g], {"А-26-01"}, weeks, MONDAY, failed=failed)]
-    assert past not in tasks and future not in tasks and len(tasks) == len(all_tasks) - 2
-    failed = {f"{past.isoformat()}|1": time.time() - 8 * 86400, f"{future.isoformat()}|1": time.time() - 2 * 86400}
+    assert future not in tasks and len(tasks) == len(all_tasks) - 1
+    failed = {f"{future.isoformat()}|1": time.time() - 2 * 86400}
     tasks = [m for m, _, _ in sync.plan([g], {"А-26-01"}, weeks, MONDAY, failed=failed)]
-    assert past in tasks and future in tasks  # прошло время — пробуем снова
+    assert future in tasks  # прошло время — пробуем снова
+
+
+def test_sync_far_weeks_only_for_active_groups(monkeypatch):
+    """Дальние недели — только группам, которые кто-то открывал недавно; ближние — всем выбранным."""
+    monkeypatch.setattr(bot, "client", GubkinClient())
+    weeks = sync.mondays(TODAY)
+    groups = [{"id": "1", "code": "А-26-01"}, {"id": "2", "code": "Б-26-02"}]
+    tasks = sync.plan(groups, {"А-26-01", "Б-26-02"}, weeks, MONDAY, active={"А-26-01"})
+    near = {MONDAY + dt.timedelta(weeks=k) for k in range(3)}
+    by = {c: [m for m, g, _ in tasks if g["code"] == c] for c in ("А-26-01", "Б-26-02")}
+    assert set(by["Б-26-02"]) == near & set(weeks)
+    assert len(by["А-26-01"]) > len(by["Б-26-02"])
 
 
 def test_sync_retries_when_site_did_not_answer(tmp_path, monkeypatch):
@@ -950,7 +963,8 @@ def test_manual_sync_has_no_time_limit_scheduled_has(tmp_path, monkeypatch):
     assert sync.run(interactive=True) == 0
     assert clock[0] > 25 * 60  # шло дольше прежних 25 минут — и не оборвалось
     cache = json.loads((tmp_path / "manual" / "cache.json").read_text(encoding="utf-8"))
-    assert len([k for k in cache if k.split("|")[1] in ("10706", "10707")]) == 2 * len(weeks)  # всё скачано
+    future = [m for m in weeks if m >= dt.date.today() - dt.timedelta(days=dt.date.today().weekday())]
+    assert len([k for k in cache if k.split("|")[1] in ("10706", "10707")]) == 2 * len(future)  # всё скачано
     mid = [t for t, name in puts if name == "cache.json"][:-1]
     assert mid and all(b - a >= sync.SEND_EVERY for a, b in zip(mid, mid[1:]))  # промежуточно — раз в 10 минут
     assert touched and all(touched)  # замок обновлялся, пока он был
