@@ -1179,3 +1179,38 @@ def test_full_mode_waits_instead_of_stopping(monkeypatch):
         bot.client._cache[(m, "1")] = (time.time() - 4 * 86400, {})
     full = [m for m, _, _ in sync.plan([g], {"А-26-01"}, weeks, MONDAY, far_weeks=len(weeks))]
     assert [m for m in weeks if m > MONDAY] == [m for m in full if m > MONDAY]
+
+
+def test_sync_retries_after_short_connection_drop(tmp_path, monkeypatch):
+    """На миг пропала связь (старой копии нет) — в конце запуска выбранной группе даём второй шанс."""
+    import requests
+    calls = []
+
+    def fake_get(self, params):
+        calls.append(params)
+        if len(calls) == 1:
+            raise requests.ConnectionError("обрыв")
+        return week_for(str(params["groupId"]), "ГМ-26-11", "Геология")
+    monkeypatch.setattr(GubkinClient, "_get", fake_get)
+    client = GubkinClient(cache_file=str(tmp_path / "cache.json"))
+    client.slim = slim_week
+    for m in sync.mondays(dt.date.today()):
+        if m > MONDAY:
+            client._cache[(m, "10706")] = (time.time() - 2 * 86400, {})
+    monkeypatch.setattr(bot, "client", client)
+    monkeypatch.setattr(bot, "_group", {"id": "10706", "code": bot.GROUP_CODE, "faculty": ""})
+    monkeypatch.setattr(bot, "_groups_cache", {"mtime": None, "list": []})
+    for name in ("GROUPS_FILE", "USER_GROUPS_FILE", "GROUP_FILE"):
+        monkeypatch.setattr(bot, name, tmp_path / getattr(bot, name).name)
+    bot.GROUPS_FILE.write_text(json.dumps({"faculties": [{"key": "geo", "groups": GROUPS[:1]}], "time": time.time(),
+                                           "tried": [f["key"] for f in bot.FACULTIES]}), encoding="utf-8")
+    monkeypatch.setattr(sync, "LOG", tmp_path / "sync.log")
+    monkeypatch.setattr(sync, "FAILED", tmp_path / "sync_failed.json")
+    monkeypatch.setattr(sync.time, "sleep", lambda s: None)
+
+    class R:
+        returncode = 0
+        stdout = b"{}"
+    monkeypatch.setattr(sync, "ssh", lambda *a, **kw: R())
+    sync.download(False, "root@test")  # не падает: текущая неделя скачалась со второй попытки
+    assert (MONDAY, "10706") in client._cache and client._cache[(MONDAY, "10706")][1]

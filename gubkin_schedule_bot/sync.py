@@ -544,7 +544,8 @@ def download(interactive: bool, srv: str) -> int:
     if interactive and tasks:
         print()
     # сайт иногда не отвечает на первые запросы (перед капчей) — выбранным группам даём второй шанс
-    again = [k for k, e in failed.items() if e == "сайт не ответил" and k[2]]
+    # и тем, у кого на миг пропала связь: одна-две такие недели — обычно короткий обрыв, а не «сайт лежит»
+    again = [k for k, e in failed.items() if (e == "сайт не ответил" or e in NO_LINK) and k[2]]
     if again and (deadline is None or time.monotonic() < deadline + 60):
         time.sleep(5)
         by_code = {g["code"]: g for g in groups}
