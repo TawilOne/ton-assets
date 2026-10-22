@@ -36,7 +36,7 @@
     background-attachment: fixed;
   }
   /* большая кнопка «Карта вуза» — открывает campus.html */
-  .campus-btn { display: flex; align-items: center; gap: 14px; margin: 0 0 14px; padding: 16px 18px; border-radius: var(--radius);
+  .campus-btn { display: flex; align-items: center; gap: 14px; margin: 14px 0 0; padding: 16px 18px; border-radius: var(--radius);
                 text-decoration: none; color: var(--text); border: 1px solid rgba(255,0,0,.35);
                 background: linear-gradient(135deg, rgba(255,0,0,.20), rgba(255,0,0,.05) 60%), var(--surface); }
   .campus-btn:active { transform: scale(.98); }
@@ -205,10 +205,10 @@
   <button id="beta-close" aria-label="Скрыть">×</button>
 </div>
 <div id="main"></div>
-<a class="campus-btn" id="campus-btn" href="campus.html"><span class="ico">🗺</span><span><b id="campus-t">Карта вуза</b>
-  <small id="campus-s">Двор, главный корпус, 2 корпус, ДК, библиотека</small></span><span class="go">›</span></a>
 <div class="card" id="day"><div class="section-title"><h2 id="day-title">Пары дня</h2><span id="count"></span></div>
   <ul class="timeline" id="list"></ul></div>
+<a class="campus-btn" id="campus-btn" href="campus.html"><span class="ico">🗺</span><span><b id="campus-t">Карта вуза</b>
+  <small id="campus-s">Двор, главный корпус, 2 корпус, ДК, библиотека</small></span><span class="go">›</span></a>
 
 <script>
 const tg = window.Telegram && window.Telegram.WebApp;
