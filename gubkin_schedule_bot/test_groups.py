@@ -7,6 +7,7 @@ import base64
 import copy
 import datetime as dt
 import json
+import pathlib
 import time
 import zlib
 
@@ -321,7 +322,8 @@ def test_sync_plan_order(monkeypatch):
     assert not [m for m, g, _ in sync.plan(groups, {"Б-26-02"}, weeks, MONDAY, today=tuesday) if m in far]
     for m in far:
         bot.client._cache[(m, "1")] = (time.time() - 3 * 86400, {})
-    assert [m for m, g, _ in sync.plan(groups, {"Б-26-02"}, weeks, MONDAY, today=tuesday) if m in far] == far
+    soon = [m for m in far if m <= MONDAY + dt.timedelta(weeks=sync.FAR_WEEKS)]
+    assert [m for m, g, _ in sync.plan(groups, {"Б-26-02"}, weeks, MONDAY, today=tuesday) if m in far] == soon
 
 
 def test_sync_plan_limits_other_groups(monkeypatch):
@@ -1098,3 +1100,34 @@ def test_broken_files_dont_wipe_what_is_known(env, monkeypatch):
     (env / "cache.json").write_text("{обрывок", encoding="utf-8")
     os.utime(env / "cache.json", (time.time() + 5, time.time() + 5))
     assert bot.client.has_group("20001"), "расписание пропало из-за битого файла"
+
+
+def test_captcha_too_often_stops_instead_of_asking_again(monkeypatch):
+    """Капча вернулась почти сразу после введённой — не мучаем человека, а останавливаемся."""
+    real_solve = sync.solve_captcha
+    monkeypatch.setattr(sync, "_captcha", {"solved": 0, "ok_since": 0})
+    monkeypatch.setattr(bot, "client", GubkinClient())
+    solved = []
+    monkeypatch.setattr(sync, "solve_captcha", lambda: solved.append(1))
+    calls = {"n": 0}
+
+    def site():
+        calls["n"] += 1
+        if calls["n"] in (1, 3):  # капча, после неё один удачный запрос — и снова капча
+            raise sync.CaptchaRequired("капча")
+        return "ok"
+    assert sync._with_captcha(True, site) == "ok" and solved == [1]
+    with pytest.raises(sync.CaptchaTooOften):
+        sync._with_captcha(True, site)
+    assert solved == [1]  # второй раз вводить не просили
+
+    # пустой ввод — сразу остановка, без трёх попыток и без проверки кода на сайте
+    asked = []
+    monkeypatch.setattr("builtins.input", lambda *_: asked.append(1) or "  ")
+    monkeypatch.setattr(sync, "_save_captcha", lambda data, attempt: pathlib.Path("c.png"))
+    monkeypatch.setattr(bot.client, "captcha_image", lambda: b"")
+    monkeypatch.setattr(bot.client, "validate_captcha", lambda code: pytest.fail("пустой код не проверяем"))
+    monkeypatch.setattr(sync.os, "name", "posix")
+    with pytest.raises(sync.CaptchaRequired):
+        real_solve()
+    assert asked == [1]

@@ -145,7 +145,9 @@ def solve_captcha() -> None:
                 print(f"Картинка: {pic}")
         except OSError:  # не открылся просмотрщик — покажем путь, картинку откроют вручную
             print(f"Откройте картинку капчи: {pic}")
-        code = captcha_text(input("Введите символы с картинки (русские буквы и цифры): "))
+        code = captcha_text(input("\nВведите символы с картинки (русские буквы и цифры, пусто — остановиться): "))
+        if not code:  # нажали Enter без кода — останавливаемся, скачанное сохраним
+            raise CaptchaRequired("капча пропущена")
         if bot.client.validate_captcha(code):
             print("✅ Капча принята")
             return
@@ -174,15 +176,32 @@ NO_LINK = {"не удалось подключиться через прокси
 DAY = 20 * 3600  # «раз в сутки»: запуски идут каждые 3 часа, 20 часов — с запасом
 
 
+class CaptchaTooOften(CaptchaRequired):
+    """Сайт просит капчу снова почти сразу после введённой: запросов было слишком много подряд."""
+
+
+CAPTCHA_GAP = 20  # меньше стольких запросов между капчами — сайт нас притормаживает, пора остановиться
+_captcha = {"solved": 0, "ok_since": 0}
+
+
 def _with_captcha(interactive: bool, func, *args):
-    """Вызывает func; если сайт просит капчу — вручную показываем её, по расписанию — сдаёмся."""
+    """Вызывает func; если сайт просит капчу — вручную показываем её, по расписанию — сдаёмся.
+    Если капча возвращается почти сразу, вводить её снова и снова бессмысленно: сайт ограничивает
+    частоту запросов. Тогда останавливаемся (скачанное сохраняется) — продолжим позже."""
     while True:
         try:
-            return func(*args)
+            result = func(*args)
+            _captcha["ok_since"] += 1
+            return result
         except CaptchaRequired:
             if not interactive:
                 raise
+            if _captcha["solved"] and _captcha["ok_since"] < CAPTCHA_GAP:
+                raise CaptchaTooOften("капча слишком часто")
             solve_captcha()
+            _captcha["solved"] += 1
+            _captcha["ok_since"] = 0
+            bot.client.delay = max(bot.client.delay, 3.0)  # после капчи — помедленнее
 
 
 def _group_rows(rows) -> list[dict]:
@@ -286,6 +305,7 @@ def _save_failed(data: dict) -> None:
         pass
 
 
+FAR_WEEKS = 6  # дальние недели обновляем до стольких недель вперёд; ещё дальше — только если их нет
 FAR_AGE = 3 * 86400 - 4 * 3600  # дальние недели выбранных групп — раз в 3 дня (почти не меняются)
 
 
@@ -326,7 +346,8 @@ def plan(groups: list[dict], wanted: set[str], weeks: list[dt.date], this_monday
             err = failed.get(f"{m.isoformat()}|{g['id']}")
             if err and time.time() - err < (7 * 86400 if m < this_monday else DAY):
                 continue
-            if age is None or (m > this_monday and age > FAR_AGE):
+            soon = m <= this_monday + dt.timedelta(weeks=FAR_WEEKS)
+            if age is None or (m > this_monday and soon and age > FAR_AGE):
                 tasks.append((m, g, True))
     return tasks
 
@@ -404,7 +425,7 @@ def download(interactive: bool, srv: str) -> int:
     bot.client.validate = _validator(_check_saved(), stats)
     wanted = wanted_codes(srv)
     bad_weeks = _load_failed()
-    tasks = plan(groups, wanted, weeks, this_monday, others_limit=None if interactive else 60, failed=bad_weeks,
+    tasks = plan(groups, wanted, weeks, this_monday, others_limit=150 if interactive else 60, failed=bad_weeks,
                  today=today)
     say(f"групп: {len(groups)}, выбраны пользователями: {len(wanted & {g['code'] for g in groups})}, "
         f"запросов в плане: {len(tasks)}")
@@ -575,9 +596,14 @@ def _run(interactive: bool) -> int:
         n = download(interactive, srv)
         status.update(ok=True, last_ok=now)
         say(f"обновлено недель: {n}")
+    except CaptchaTooOften:
+        status["error"] = "captcha"
+        say("сайт просит капчу слишком часто — значит, мы спросили слишком много подряд. Остановился: "
+            "скачанное сохранено и уходит на сервер. Запустите sync_now.bat снова через 1–2 часа")
     except CaptchaRequired:
         status["error"] = "captcha"
-        say("сайт просит капчу — запустите sync_now.bat")
+        say("остановился на капче — скачанное сохранено. Докачаю в следующий раз"
+            if interactive else "сайт просит капчу — запустите sync_now.bat")
     except guard.SuspiciousData as e:
         status["error"] = "suspicious: " + str(e)[:250]
         say(f"не удалось скачать: {e}")
