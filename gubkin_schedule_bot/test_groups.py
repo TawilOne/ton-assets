@@ -1131,3 +1131,30 @@ def test_captcha_too_often_stops_instead_of_asking_again(monkeypatch):
     with pytest.raises(sync.CaptchaRequired):
         real_solve()
     assert asked == [1]
+
+
+def test_full_mode_waits_instead_of_stopping(monkeypatch):
+    """«Всё за раз»: капча слишком часто — ждём передышку и продолжаем, а не останавливаемся."""
+    monkeypatch.setattr(sync, "_captcha", {"solved": 1, "ok_since": 0})
+    monkeypatch.setattr(sync, "FULL", {"on": True})
+    monkeypatch.setattr(bot, "client", GubkinClient())
+    monkeypatch.setattr(sync, "_touch_lock", lambda: None)
+    slept = []
+    monkeypatch.setattr(sync.time, "sleep", lambda s: slept.append(s))
+    monkeypatch.setattr(sync, "solve_captcha", lambda: None)
+    calls = {"n": 0}
+
+    def site():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise sync.CaptchaRequired("капча")
+        return "ok"
+    assert sync._with_captcha(True, site) == "ok"
+    assert sum(slept) == sync.PAUSE
+    # а все недели семестра в плане — в режиме «всё за раз» есть и дальние
+    weeks = sync.mondays(TODAY)
+    g = {"id": "1", "code": "А-26-01"}
+    for m in weeks:
+        bot.client._cache[(m, "1")] = (time.time() - 4 * 86400, {})
+    full = [m for m, _, _ in sync.plan([g], {"А-26-01"}, weeks, MONDAY, far_weeks=len(weeks))]
+    assert [m for m in weeks if m > MONDAY] == [m for m in full if m > MONDAY]

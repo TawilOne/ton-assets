@@ -180,6 +180,8 @@ class CaptchaTooOften(CaptchaRequired):
     """Сайт просит капчу снова почти сразу после введённой: запросов было слишком много подряд."""
 
 
+FULL = {"on": False}  # sync_full.bat: весь план за один запуск, медленно и с передышками
+PAUSE = 10 * 60      # передышка, когда сайт просит капчу слишком часто
 CAPTCHA_GAP = 20  # меньше стольких запросов между капчами — сайт нас притормаживает, пора остановиться
 _captcha = {"solved": 0, "ok_since": 0}
 
@@ -197,7 +199,15 @@ def _with_captcha(interactive: bool, func, *args):
             if not interactive:
                 raise
             if _captcha["solved"] and _captcha["ok_since"] < CAPTCHA_GAP:
-                raise CaptchaTooOften("капча слишком часто")
+                if not FULL["on"]:
+                    raise CaptchaTooOften("капча слишком часто")
+                # «всё за раз»: не долбим сайт, а ждём, пока он успокоится, и продолжаем
+                print(f"\n  ⏸ сайт просит передышку — жду {PAUSE // 60} минут и продолжу "
+                      "(окно не закрывайте, можно заниматься своими делами)")
+                _touch_lock()
+                for _ in range(PAUSE // 60):
+                    time.sleep(60)
+                    _touch_lock()
             solve_captcha()
             _captcha["solved"] += 1
             _captcha["ok_since"] = 0
@@ -311,7 +321,7 @@ FAR_AGE = 3 * 86400 - 4 * 3600  # дальние недели выбранных
 
 def plan(groups: list[dict], wanted: set[str], weeks: list[dt.date], this_monday: dt.date,
          others_limit: int | None = None, failed: dict | None = None,
-         today: dt.date | None = None) -> list[tuple]:
+         today: dt.date | None = None, far_weeks: int | None = None) -> list[tuple]:
     """Что скачать в этот раз, по порядку важности: [(понедельник, группа, выбрана ли)].
     others_limit — сколько недель невыбранных групп брать за раз (по расписанию — порциями,
     чтобы не делать сотню запросов подряд и не нарваться на капчу).
@@ -346,7 +356,7 @@ def plan(groups: list[dict], wanted: set[str], weeks: list[dt.date], this_monday
             err = failed.get(f"{m.isoformat()}|{g['id']}")
             if err and time.time() - err < (7 * 86400 if m < this_monday else DAY):
                 continue
-            soon = m <= this_monday + dt.timedelta(weeks=FAR_WEEKS)
+            soon = m <= this_monday + dt.timedelta(weeks=FAR_WEEKS if far_weeks is None else far_weeks)
             if age is None or (m > this_monday and soon and age > FAR_AGE):
                 tasks.append((m, g, True))
     return tasks
@@ -425,8 +435,12 @@ def download(interactive: bool, srv: str) -> int:
     bot.client.validate = _validator(_check_saved(), stats)
     wanted = wanted_codes(srv)
     bad_weeks = _load_failed()
-    tasks = plan(groups, wanted, weeks, this_monday, others_limit=150 if interactive else 60, failed=bad_weeks,
-                 today=today)
+    if FULL["on"]:  # всё за раз: все недели семестра и все группы, но медленнее
+        bot.client.delay = 3.0
+        tasks = plan(groups, wanted, weeks, this_monday, failed=bad_weeks, today=today, far_weeks=len(weeks))
+    else:
+        tasks = plan(groups, wanted, weeks, this_monday, others_limit=150 if interactive else 60, failed=bad_weeks,
+                     today=today)
     say(f"групп: {len(groups)}, выбраны пользователями: {len(wanted & {g['code'] for g in groups})}, "
         f"запросов в плане: {len(tasks)}")
     # по расписанию задача Windows живёт не дольше 15 минут; вручную — качаем, сколько нужно
@@ -697,7 +711,9 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--setup", action="store_true")
     p.add_argument("--interactive", action="store_true")
+    p.add_argument("--full", action="store_true", help="всё за раз (sync_full.bat): медленно, с передышками")
     a = p.parse_args()
+    FULL["on"] = a.full and a.interactive
     if a.setup:
         setup()
     else:
