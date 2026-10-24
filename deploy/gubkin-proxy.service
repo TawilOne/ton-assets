@@ -1,0 +1,14 @@
+[Unit]
+Description=Gubkin bot: proxy to Telegram via VPN key (sing-box)
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/gubkin-bot/sing-box.json
+
+[Service]
+ExecStart=/usr/local/bin/sing-box run -c /etc/gubkin-bot/sing-box.json
+Restart=always
+RestartSec=5
+DynamicUser=yes
+
+[Install]
+WantedBy=multi-user.target
