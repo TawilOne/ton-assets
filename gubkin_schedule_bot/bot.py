@@ -993,6 +993,36 @@ async def changes_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
             await asyncio.sleep(0.05)
 
 
+# ---- шахматы: «кто-то ищет игру» тем, кто включил уведомления в мини-приложении
+
+GAMES_DB = DATA_DIR / "games.db"  # база сервера игр (games.py); он кладёт уведомления, бот их отправляет
+_games_store: list = [None]
+
+
+async def games_notify_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if not GAMES_DB.exists():
+        return
+    try:
+        if _games_store[0] is None:
+            import games  # python-chess и aiohttp нужны только здесь
+            _games_store[0] = games.Store(GAMES_DB)
+        todo = _games_store[0].take_outbox()
+    except Exception:  # noqa: BLE001 — база занята или игр на этом сервере нет: попробуем в следующий раз
+        log.warning("games outbox", exc_info=True)
+        return
+    for n in todo:
+        uid, lang = n["uid"], i18n.get_lang(n["uid"])
+        url = _webapp_base() + "games.html?" + urlencode({"g": n["gid"], "lg": lang, "bot": _bot_username(ctx)})
+        who = n["name"] + (f" · {n['faculty']}" if n["faculty"] else "")
+        try:
+            await ctx.bot.send_message(int(uid), i18n.t("chess_seek", lang, who=who), reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton(i18n.t("chess_seek_btn", lang), web_app=WebAppInfo(url))]]))
+        except Forbidden:
+            _mark_blocked(uid, True)
+        except Exception:  # noqa: BLE001
+            log.warning("cannot send chess notification to %s", uid)
+
+
 async def on_error(update: object, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Непойманная ошибка в обработчике: пишем в журнал, а человеку — что что-то пошло не так
     (раньше он просто не получал ответа)."""
@@ -1579,6 +1609,7 @@ def main() -> None:
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler("free", cmd_free))
     app.job_queue.run_repeating(digest_job, interval=30, first=10)  # рассылка в выбранное время
+    app.job_queue.run_repeating(games_notify_job, interval=5, first=15)  # шахматы: «кто-то ищет игру»
     # подгрузка расписания при старте и каждые 20 минут (кэш живёт 30 минут)
     if client.offline:  # сервер: на сайт не ходим, следим за присылаемым расписанием
         log.info("offline: расписание берётся из cache.json, который присылает ноутбук (sync.py)")

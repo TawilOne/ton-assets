@@ -1238,3 +1238,34 @@ def test_games_command_opens_games_tab(env):
     url = kw["reply_markup"].inline_keyboard[0][0].web_app.url
     assert "шахматы" in text and url.endswith("games.html?lg=ru&bot=gubkin_test_bot")
     assert all(any(c == "games" for c, _ in cmds) for cmds in bot.COMMANDS.values())
+
+
+def test_bot_sends_chess_search_notifications(env, monkeypatch, tmp_path):
+    """Сервер игр положил «кто-то ищет игру» в очередь — бот присылает сообщение с кнопкой «♟ Играть»."""
+    import games
+    from telegram.error import Forbidden
+    db = tmp_path / "games.db"
+    monkeypatch.setattr(bot, "GAMES_DB", db)
+    monkeypatch.setattr(bot, "_games_store", [None])
+    run(bot.games_notify_job(Obj(bot=Obj(send_message=None))))  # базы игр нет — ничего не делаем
+    s = games.Store(db)
+    s.touch({"id": 1, "first_name": "Иван", "last_name": "Тестов"})
+    s.db.execute("INSERT INTO games (id, kind, creator, status, created, updated) VALUES ('g1', 'search', 1, 'wait', 0, 0)")
+    s.db.execute("INSERT INTO outbox VALUES ('g1', 2, ?), ('g1', 3, ?)", (time.time(), time.time()))
+    s.db.commit()
+    sent = []
+
+    async def send_message(chat, text, **kw):
+        if chat == 3:
+            raise Forbidden("bot was blocked by the user")
+        sent.append((chat, text, kw["reply_markup"].inline_keyboard[0][0]))
+    blocked = []
+    monkeypatch.setattr(bot, "_mark_blocked", lambda uid, b: blocked.append((uid, b)))
+    c = Obj(bot=Obj(send_message=send_message, username="gubkin_test_bot"))
+    run(bot.games_notify_job(c))
+    (chat, text, btn), = sent
+    assert chat == 2 and "Иван Т." in text and "ищет соперника" in text and btn.text == "♟ Играть"
+    assert "games.html?g=g1" in btn.web_app.url
+    assert blocked == [(3, True)]  # заблокировал бота — отмечаем
+    run(bot.games_notify_job(c))
+    assert len(sent) == 1  # очередь пуста — повторно не шлём

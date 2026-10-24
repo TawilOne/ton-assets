@@ -20,6 +20,8 @@ import secrets
 import sqlite3
 import time
 import urllib.parse
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import asyncio
 import shutil
@@ -40,6 +42,9 @@ ABANDON = 3 * 60           # вышел из партии (закрыл мини
 CANCEL_RACE = 15           # соперник подсел за секунды до «Отменить» — отмена всё равно срабатывает
 GRACE = 20                 # мини-приложение спрашивает сервер каждые 2–8 с; тишина дольше — человека нет на месте
 WAIT_MAX = 86400           # приглашение и поиск соперника живут сутки
+NOTIFY_EVERY = 30 * 60     # «кто-то ищет игру» — одному человеку не чаще раза в полчаса
+NOTIFY_QUIET = (23, 7)     # ночью (по Москве) не будим
+MSK = ZoneInfo("Europe/Moscow")
 START_RATING, K = 1200, 32
 BOT = 0  # «игрок» бот: id 0 в партии; партии с ботом не трогают ни рейтинг, ни статистику
 # уровни бота: (название, Skill Level Stockfish 0–20, время на ход, доля случайных ходов)
@@ -119,10 +124,13 @@ class Store:
                 white INTEGER, black INTEGER, moves TEXT DEFAULT '', status TEXT, result TEXT DEFAULT '',
                 reason TEXT DEFAULT '', draw_offer INTEGER DEFAULT 0, created REAL, updated REAL);
             CREATE INDEX IF NOT EXISTS games_status ON games(status, kind);
+            CREATE TABLE IF NOT EXISTS outbox (gid TEXT, uid INTEGER, created REAL);  -- уведомления для бота
         """)
         for table, column in (("games", "level INTEGER DEFAULT 0"),  # уровень бота
                               ("players", "photo TEXT DEFAULT ''"),  # аватарка из Telegram (photo_url)
-                              ("games", "seen_w REAL DEFAULT 0"), ("games", "seen_b REAL DEFAULT 0")):  # кто когда был в партии
+                              ("games", "seen_w REAL DEFAULT 0"), ("games", "seen_b REAL DEFAULT 0"),  # кто когда был в партии
+                              ("players", "notify INTEGER DEFAULT 0"),  # хочет знать, когда кто-то ищет игру
+                              ("players", "notified REAL DEFAULT 0")):
             try:  # у старой базы колонки ещё нет
                 self.db.execute(f"ALTER TABLE {table} ADD COLUMN {column}")
             except sqlite3.OperationalError:
@@ -160,6 +168,44 @@ class Store:
         return self.db.execute("SELECT COUNT(DISTINCT g.creator) FROM games g JOIN players p ON p.id = g.creator "
                                "WHERE g.status = 'wait' AND g.kind = 'search' AND g.creator != ? AND p.seen > ?",
                                (uid, time.time() - GRACE)).fetchone()[0]
+
+    # ---- уведомления «кто-то ищет игру» (по желанию; отправляет бот — bot.py, games_notify_job)
+
+    def notify_on(self, uid: int) -> bool:
+        r = self.db.execute("SELECT notify FROM players WHERE id = ?", (uid,)).fetchone()
+        return bool(r and r["notify"])
+
+    def set_notify(self, uid: int, on: bool) -> None:
+        self.db.execute("UPDATE players SET notify = ? WHERE id = ?", (int(bool(on)), uid))
+        self.db.commit()
+
+    def _announce_search(self, uid: int, gid: str) -> None:
+        """Новый открытый поиск — в очередь тем, кто включил уведомления. Не пишем: самому ищущему,
+        тем, кто сейчас в мини-приложении (они и так видят), чаще раза в полчаса и ночью."""
+        now = time.time()
+        hour = datetime.fromtimestamp(now, MSK).hour
+        if hour >= NOTIFY_QUIET[0] or hour < NOTIFY_QUIET[1]:
+            return
+        rows = self.db.execute("SELECT id FROM players WHERE notify = 1 AND id != ? AND (seen IS NULL OR seen < ?) "
+                               "AND (notified IS NULL OR notified < ?)", (uid, now - GRACE, now - NOTIFY_EVERY)).fetchall()
+        for r in rows:
+            self.db.execute("INSERT INTO outbox (gid, uid, created) VALUES (?, ?, ?)", (gid, r["id"], now))
+            self.db.execute("UPDATE players SET notified = ? WHERE id = ?", (now, r["id"]))
+        self.db.commit()
+
+    def take_outbox(self) -> list[dict]:
+        """Для бота: забрать накопившиеся уведомления. Поиск уже закончился (нашёлся соперник, отменили)
+        или уведомление старше минуты — не шлём."""
+        now = time.time()
+        rows = self.db.execute("SELECT o.uid, o.gid, g.creator FROM outbox o JOIN games g ON g.id = o.gid "
+                               "WHERE g.status = 'wait' AND g.kind = 'search' AND o.created > ?", (now - 60,)).fetchall()
+        self.db.execute("DELETE FROM outbox")
+        self.db.commit()
+        out = []
+        for r in rows:
+            who = self.player(r["creator"]) or {}
+            out.append({"uid": r["uid"], "gid": r["gid"], "name": who.get("name", ""), "faculty": who.get("faculty", "")})
+        return out
 
     # ---- партии
 
@@ -233,6 +279,8 @@ class Store:
         self.db.execute("INSERT INTO games (id, kind, creator, status, created, updated) VALUES (?, ?, ?, 'wait', ?, ?)",
                         (gid, kind, uid, now, now))
         self.db.commit()
+        if kind == "search":
+            self._announce_search(uid, gid)
         return gid
 
     def join(self, uid: int, gid: str) -> str:
@@ -240,7 +288,8 @@ class Store:
         if g["status"] != "wait":
             if uid in (g["white"], g["black"]):
                 return gid  # уже в этой партии — просто откроем её
-            raise GameError("В эту партию уже играют")
+            raise GameError("Этот игрок уже нашёл соперника — нажмите «Найти соперника»" if g["kind"] == "search"
+                            else "В эту партию уже играют")
         if g["creator"] == uid:
             return gid  # своё приглашение — ждём друга
         self._drop_search(uid)
@@ -551,11 +600,16 @@ def make_app(store: Store, token: str, engine: Engine | None = None) -> web.Appl
 
     async def me(request):
         uid = who(request)
-        return web.json_response({"me": store.player(uid), "games": store.my_games(uid, here=True),
+        return web.json_response({"me": store.player(uid), "notify": store.notify_on(uid), "games": store.my_games(uid, here=True),
                                   "searching": store.searching(uid)})
 
     async def searching(request):  # лобби спрашивает каждые 2 с — только число, без списка и рейтинга
         return web.json_response({"searching": store.searching(who(request))})
+
+    async def notify(request):  # кнопка «🔔 Сообщать, когда кто-то ищет игру»
+        uid = who(request)
+        store.set_notify(uid, bool((await body(request)).get("on")))
+        return web.json_response({"notify": store.notify_on(uid)})
 
     async def top(request):
         who(request)
@@ -610,6 +664,7 @@ def make_app(store: Store, token: str, engine: Engine | None = None) -> web.Appl
     app.router.add_get("/api/game", game)
     app.router.add_post("/api/new", new)
     app.router.add_post("/api/act", act)
+    app.router.add_post("/api/notify", notify)
     app.router.add_route("OPTIONS", "/api/{tail:.*}", ping)
     return app
 

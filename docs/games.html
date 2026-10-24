@@ -113,6 +113,17 @@
          border-radius: 14px; background: #3a1214; border: 1px solid rgba(255,0,0,.4); display: none; z-index: 9; }
   .err.on { display: block; }
   .wait { text-align: center; padding: 10px 0; }
+  .notif { display: flex; align-items: center; gap: 12px; width: 100%; margin-top: 14px; padding: 12px 14px; text-align: left;
+           background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.08); border-radius: 16px; color: var(--text);
+           font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+  .notif span { flex: 1; min-width: 0; }
+  .notif b { display: block; font-size: 14px; font-weight: 600; }
+  .notif small { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .notif i { flex: none; position: relative; width: 46px; height: 28px; border-radius: 14px; background: #3a3a40; transition: background .2s; }
+  .notif i::after { content: ""; position: absolute; top: 3px; left: 3px; width: 22px; height: 22px; border-radius: 50%;
+                    background: #fff; transition: transform .2s; }
+  .notif.on i { background: var(--green); }
+  .notif.on i::after { transform: translateX(18px); }
   .seeking { text-align: center; font-size: 13px; color: var(--muted); margin: 12px 0 -2px; }
   .seeking.on { color: var(--text); }
   .seeking b { font-weight: 700; }
@@ -158,6 +169,10 @@ const T = {
                       `<i></i>Cherchent une partie : <b>${n}</b>`)
                  : L3("Сейчас никто не ищет игру — начните первым", "Nobody is looking for a game right now — be the first",
                       "Personne ne cherche de partie — soyez le premier"),
+  notify: L3("🔔 Сообщать, когда кто-то ищет игру", "🔔 Tell me when someone is looking for a game",
+             "🔔 Me prévenir quand quelqu'un cherche une partie"),
+  notifySub: L3("Бот пришлёт сообщение, не чаще раза в полчаса и не ночью", "The bot will message you, at most every 30 minutes and not at night",
+                "Le bot vous écrira, au plus toutes les 30 minutes et jamais la nuit"),
   invite: L3("🤝 Играть с другом", "🤝 Play with a friend", "🤝 Jouer avec un ami"),
   vsBot: L3("🤖 Сыграть с ботом", "🤖 Play the bot", "🤖 Jouer contre le bot"),
   levels: [L3("🐣 Новичок", "🐣 Beginner", "🐣 Débutant"), L3("🙂 Средний", "🙂 Intermediate", "🙂 Intermédiaire"),
@@ -272,7 +287,7 @@ function showSeeking(n) {
 }
 async function loadLobby() {
   const [me, top] = await Promise.all([api("/api/me"), api("/api/top")]);
-  state.me = me.me; state.games = me.games; state.top = top.top; state.searching = me.searching || 0;
+  state.me = me.me; state.notify = !!me.notify; state.games = me.games; state.top = top.top; state.searching = me.searching || 0;
   if (state.view === "lobby") render();
 }
 
@@ -299,7 +314,9 @@ function lobbyHTML() {
       <button class="btn red" id="b-search">${T.search}</button><button class="btn" id="b-invite">${T.invite}</button>
       <button class="btn" id="b-bot">${T.vsBot}</button>
       ${state.pickLevel ? `<div class="row">${T.levels.map((t, i) => `<button class="btn small" data-level="${i + 1}">${t}</button>`).join("")}</div>
-        <div class="muted" style="margin-top:8px">${T.botNote}</div>` : ""}</div>
+        <div class="muted" style="margin-top:8px">${T.botNote}</div>` : ""}
+      <button class="notif${state.notify ? " on" : ""}" id="b-notify" role="switch" aria-checked="${!!state.notify}">
+        <span><b>${T.notify}</b><small>${T.notifySub}</small></span><i></i></button></div>
     ${games ? `<div class="card"><h2>${T.my}</h2><div class="list">${games}</div></div>` : ""}
     <div class="card"><h2>${T.top}<span>${L3("победы–поражения–ничьи", "W–L–D", "V–D–N")}</span></h2>
       ${top ? `<div class="list">${top}</div>` : `<div class="muted">${T.topEmpty}</div>`}</div>`;
@@ -581,6 +598,12 @@ function render() {
   app.innerHTML = lobbyHTML();
   document.getElementById("b-search").onclick = () => start("search");
   document.getElementById("b-invite").onclick = () => start("invite");
+  document.getElementById("b-notify").onclick = async () => {
+    const want = !state.notify;
+    state.notify = want; render(); haptic("sel");  // переключаем сразу, сервер — следом
+    try { state.notify = !!(await api("/api/notify", { on: want })).notify; } catch (e) { state.notify = !want; showErr(e.message); }
+    render();
+  };
   document.getElementById("b-bot").onclick = () => { state.pickLevel = !state.pickLevel; render(); };
   document.querySelectorAll("[data-level]").forEach(b => b.onclick = () => { state.pickLevel = false; start("bot", +b.dataset.level); });
   document.querySelectorAll("[data-g]").forEach(el => el.onclick = () => openGame(el.dataset.g));

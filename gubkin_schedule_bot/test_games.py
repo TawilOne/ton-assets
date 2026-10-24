@@ -319,3 +319,68 @@ def test_starting_another_game_drops_your_search(store):
     store.create(1, "search")
     store.join(1, store.create(3, "invite"))
     assert store.searching(2) == 0
+
+
+def _daytime(monkeypatch, hour=13):
+    """Часы «по Москве» — уведомления ночью не шлются."""
+    from datetime import datetime
+    now = [datetime(2026, 10, 24, hour, 0, tzinfo=games.MSK).timestamp()]
+    monkeypatch.setattr(games.time, "time", lambda: now[0])
+    return now
+
+
+def test_notify_when_someone_searches(store, monkeypatch):
+    """Включил «🔔 Сообщать, когда кто-то ищет игру» — бот напишет, когда кто-то начнёт поиск.
+    Не пишем: самому ищущему, тем, кто сейчас в мини-приложении, чаще раза в полчаса, ночью, без галочки."""
+    now = _daytime(monkeypatch)
+    for uid in (1, 2, 3):
+        store.touch({"id": uid, "first_name": "И"})
+    store.set_notify(2, True)
+    store.set_notify(3, True)
+    assert store.notify_on(2) and not store.notify_on(1)
+    now[0] += 60  # все трое вышли из приложения минуту назад
+    store.touch({"id": 3, "first_name": "Олег"})  # Олег в приложении — он и так видит счётчик
+    gid = store.create(1, "search")
+    out = store.take_outbox()
+    assert [(n["uid"], n["gid"]) for n in out] == [(2, gid)]
+    assert out[0]["name"].startswith("И") and out[0]["faculty"] == "⛏ Геологии и геофизики"
+    assert store.take_outbox() == []  # забрали — больше не отдаём
+
+    store.cancel(1, gid)
+    now[0] += 60
+    store.create(1, "search")
+    # Марии уже писали меньше получаса назад; Олег теперь вне приложения — ему пишем
+    assert [n["uid"] for n in store.take_outbox()] == [3]
+    store.set_notify(3, False)
+
+    now[0] += 31 * 60
+    gid = store.create(1, "search")
+    store.cancel(1, gid)  # успел отменить, пока бот не отправил — не шлём
+    assert store.take_outbox() == []
+
+    now[0] += 31 * 60
+    store.set_notify(2, False)
+    gid = store.create(1, "search")
+    assert store.take_outbox() == []  # выключила
+    store.cancel(1, gid)
+
+    store.set_notify(2, True)
+    _daytime(monkeypatch, hour=2)
+    store.create(1, "search")
+    assert store.take_outbox() == []  # ночью не будим
+
+
+def test_http_notify_switch(store):
+    async def go():
+        client = TestClient(TestServer(games.make_app(store, TOKEN)))
+        await client.start_server()
+        try:
+            h = {"X-Init-Data": init_data(1)}
+            assert (await (await client.get("/api/me", headers=h)).json())["notify"] is False
+            r = await client.post("/api/notify", json={"on": True}, headers=h)
+            assert (await r.json()) == {"notify": True}
+            assert (await (await client.get("/api/me", headers=h)).json())["notify"] is True
+            assert (await client.post("/api/notify", json={"on": True})).status == 401
+        finally:
+            await client.close()
+    asyncio.run(go())

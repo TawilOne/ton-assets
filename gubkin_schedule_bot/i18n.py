@@ -216,6 +216,13 @@ TEXT = {
     "games_msg": {"ru": "🎮 Мини-игры: шахматы со студентами вуза.",
                   "en": "🎮 Mini games: chess with university students.",
                   "fr": "🎮 Mini-jeux : échecs avec les étudiants de l'université."},
+    "chess_seek": {"ru": "♟ {who} ищет соперника в шахматах. Сыграем?\n\n"
+                         "Отключить такие сообщения — кнопкой 🔔 в мини-играх.",
+                   "en": "♟ {who} is looking for a chess opponent. Fancy a game?\n\n"
+                         "To stop these messages, use the 🔔 button in the mini games.",
+                   "fr": f"♟ {{who}} cherche un adversaire aux échecs. Une partie{NBSP}?\n\n"
+                         f"Pour ne plus recevoir ces messages{NBSP}: bouton 🔔 dans les mini-jeux."},
+    "chess_seek_btn": {"ru": "♟ Играть", "en": "♟ Play", "fr": "♟ Jouer"},
     "games_open": {"ru": "🎮 Открыть игры", "en": "🎮 Open games", "fr": "🎮 Ouvrir les jeux"},
     "map_note": {"ru": "⚠️ Карта ещё находится в разработке и может быть неточной.",
                  "en": "⚠️ The map is still in development and may be inaccurate.",
