@@ -1225,3 +1225,15 @@ def test_chess_invite_link_opens_the_game(env):
     text, kw = u.effective_message.sent[-1]
     url = kw["reply_markup"].inline_keyboard[0][0].web_app.url
     assert "шахматы" in text and "games.html?g=abc123" in url and "bot=gubkin_test_bot" in url
+
+
+def test_games_command_opens_games_tab(env):
+    """/games из меню команд — кнопка, открывающая вкладку «Игры»; команда есть в меню на всех языках."""
+    u = update(uid=9, text="/games")
+    c = ctx()
+    c.bot = Obj(username="gubkin_test_bot")
+    run(bot.cmd_games(u, c))
+    text, kw = u.effective_message.sent[-1]
+    url = kw["reply_markup"].inline_keyboard[0][0].web_app.url
+    assert "шахматы" in text and url.endswith("games.html?lg=ru&bot=gubkin_test_bot")
+    assert all(any(c == "games" for c, _ in cmds) for cmds in bot.COMMANDS.values())

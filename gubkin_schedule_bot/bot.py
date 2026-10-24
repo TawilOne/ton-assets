@@ -484,6 +484,15 @@ async def _open_game(update: Update, ctx: ContextTypes.DEFAULT_TYPE, gid: str) -
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(i18n.t("chess_open", lang), web_app=WebAppInfo(url))]]))
 
 
+async def cmd_games(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """/games (меню команд): кнопка, открывающая вкладку «Игры» мини-приложения."""
+    lang = _lang(update)
+    url = _webapp_base() + "games.html?" + urlencode({"lg": lang, "bot": _bot_username(ctx)})
+    await update.effective_message.reply_text(
+        i18n.t("games_msg", lang),
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(i18n.t("games_open", lang), web_app=WebAppInfo(url))]]))
+
+
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     arg = (ctx.args or [""])[0] if getattr(ctx, "args", None) else ""
     if re.fullmatch(r"chess_[A-Za-z0-9]{4,16}", arg):
@@ -1466,11 +1475,13 @@ class _ShortNetworkErrors(logging.Filter):
 
 
 COMMANDS = {  # меню команд Telegram (кнопка «Меню» слева от поля ввода) — на языке приложения Telegram
-    "ru": [("today", "Сегодня"), ("tomorrow", "Завтра"), ("week", "Неделя"), ("group", "Выбрать группу"),
+    "ru": [("today", "Сегодня"), ("tomorrow", "Завтра"), ("week", "Неделя"), ("games", "Мини-игры: шахматы"),
+           ("group", "Выбрать группу"),
            ("subscribe", "Присылать расписание в выбранное время"), ("settings", "Настройки и язык")],
-    "en": [("today", "Today"), ("tomorrow", "Tomorrow"), ("week", "This week"), ("group", "Choose your group"),
+    "en": [("today", "Today"), ("tomorrow", "Tomorrow"), ("week", "This week"), ("games", "Mini games: chess"),
+           ("group", "Choose your group"),
            ("subscribe", "Get the timetable at a time you choose"), ("settings", "Settings and language")],
-    "fr": [("today", "Aujourd'hui"), ("tomorrow", "Demain"), ("week", "Cette semaine"),
+    "fr": [("today", "Aujourd'hui"), ("tomorrow", "Demain"), ("week", "Cette semaine"), ("games", "Mini-jeux : échecs"),
            ("group", "Choisir votre groupe"),
            ("subscribe", "Recevoir l'emploi du temps à l'heure choisie"), ("settings", "Paramètres et langue")],
 }
@@ -1543,6 +1554,7 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(on_lang, pattern=r"^lang:"))
     app.add_handler(CallbackQueryHandler(on_sub_button, pattern=r"^sub:"))
     app.add_handler(CommandHandler("group", cmd_group))
+    app.add_handler(CommandHandler(["games", "chess"], cmd_games))
     app.add_handler(CallbackQueryHandler(on_group, pattern=r"^grp:"))
     app.add_handler(CommandHandler("untranslated", cmd_untranslated))
     app.add_handler(CommandHandler("broadcast", cmd_broadcast))
