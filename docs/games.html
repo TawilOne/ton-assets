@@ -68,7 +68,23 @@
   .board { display: grid; grid-template-columns: repeat(8, 1fr); grid-template-rows: repeat(8, 1fr); width: 100%; max-width: min(440px, calc(100vh - 190px));
            min-width: 220px; margin: 0 auto;
            aspect-ratio: 1; border-radius: 12px; overflow: hidden; border: 1px solid var(--line); user-select: none; }
-  .sq { position: relative; min-height: 0; aspect-ratio: 1; display: grid; place-items: center; font-size: min(9vw, 40px, calc((100vh - 190px) / 9)); line-height: 1; cursor: pointer; }
+  .board { position: relative; display: block; touch-action: none; }
+  .board .squares { position: absolute; inset: 0; display: grid; grid-template-columns: repeat(8, 1fr); grid-template-rows: repeat(8, 1fr); }
+  .board .pieces { position: absolute; inset: 0; pointer-events: none; }
+  .pc { position: absolute; left: 0; top: 0; width: 12.5%; height: 12.5%; display: grid; place-items: center;
+        font: calc(var(--sq, 40px) * .8)/1 "Segoe UI Symbol", "Apple Symbols", "DejaVu Sans", sans-serif;
+        transition: transform .2s cubic-bezier(.2, .7, .3, 1), opacity .2s; will-change: transform; z-index: 1; }
+  .pc.w { color: #f7f7fa; text-shadow: 0 0 1px #000, 0 1px 2px rgba(0,0,0,.8); }
+  .pc.b { color: #0b0b0e; -webkit-text-stroke: .7px #c4c4d0; text-shadow: 0 1px 2px rgba(0,0,0,.6); }
+  .pc.front { z-index: 3; }
+  .pc.drag { transition: none; z-index: 5; filter: drop-shadow(0 6px 10px rgba(0,0,0,.6)); }
+  .pc.gone { opacity: 0; }
+  .taken { display: flex; align-items: center; flex-wrap: wrap; min-height: 16px; margin-top: 2px; font-size: 14px; line-height: 1;
+           font-family: "Segoe UI Symbol", "Apple Symbols", "DejaVu Sans", sans-serif; }
+  .taken span { margin-right: -3px; }
+  .taken span.w { color: #f7f7fa; text-shadow: 0 0 1px #000; } .taken span.b { color: #0b0b0e; -webkit-text-stroke: .6px #c4c4d0; }
+  .taken b { margin-left: 8px; font: 700 12px Inter, system-ui, sans-serif; color: var(--muted); }
+  .sq { position: relative; min-height: 0; transition: box-shadow .15s; display: grid; place-items: center; font-size: min(9vw, 40px, calc((100vh - 190px) / 9)); line-height: 1; cursor: pointer; }
   .sq.l { background: var(--sq-light); } .sq.d { background: var(--sq-dark); }
   .sq.last { box-shadow: inset 0 0 0 100px rgba(61,139,255,.22); }
   .sq.sel { box-shadow: inset 0 0 0 100px rgba(255,0,0,.35); }
@@ -196,9 +212,13 @@ async function tick() {
   try {
     if (state.view === "game" && state.game) {
       const g = await api("/api/game?id=" + encodeURIComponent(state.game.id));
-      if (JSON.stringify(g) !== JSON.stringify(state.game)) {
+      // пока наш ход летит на сервер или фигуру тащат — не мешаем
+      if (!state.pending && !drag && state.game && g.id === state.game.id && JSON.stringify(g) !== JSON.stringify(state.game)) {
+        const moved = g.last && g.last !== state.game.last;
         if (g.your_turn && !state.game.your_turn) haptic("medium");
-        state.game = g; render();
+        state.game = g;
+        if (state.game.status !== "wait" && document.getElementById("board")) update(moved ? g.last.slice(0, 2) : undefined);
+        else render();
       }
       poll(g.status === "over" ? 15000 : 2000);
     } else {
@@ -240,43 +260,105 @@ function lobbyHTML() {
       ${top ? `<div class="list">${top}</div>` : `<div class="muted">${T.topEmpty}</div>`}</div>`;
 }
 
-// ---- партия
+// ---- партия: доска как на chess.com — фигуры плавно едут, свой ход виден сразу, можно перетаскивать
 const GLYPH = { k: "♚", q: "♛", r: "♜", b: "♝", n: "♞", p: "♟" };
+const VAL = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
+const START = { q: 1, r: 2, b: 2, n: 2, p: 8 };
+const FILES = "abcdefgh";
 function parseFen(fen) {
-  const rows = fen.split(" ")[0].split("/"), out = {};
-  rows.forEach((row, i) => {
+  const out = {};
+  fen.split(" ")[0].split("/").forEach((row, i) => {
     let f = 0;
-    for (const ch of row) {
-      if (/\d/.test(ch)) { f += +ch; continue; }
-      out["abcdefgh"[f] + (8 - i)] = ch; f++;
-    }
+    for (const ch of row) { if (/\d/.test(ch)) f += +ch; else out[FILES[f++] + (8 - i)] = ch; }
   });
   return out;
 }
-function boardHTML(g) {
-  const pos = parseFen(g.fen), black = g.you === "black";
-  const files = "abcdefgh", ranks = "87654321";
-  const targets = state.sel ? g.legal.filter(m => m.startsWith(state.sel)).map(m => m.slice(2, 4)) : [];
-  const last = g.last ? [g.last.slice(0, 2), g.last.slice(2, 4)] : [];
-  const kingInCheck = g.check ? Object.keys(pos).find(s => pos[s] === (g.turn === "white" ? "K" : "k")) : "";
-  let html = "";
-  for (let r = 0; r < 8; r++) for (let f = 0; f < 8; f++) {
-    const file = black ? files[7 - f] : files[f], rank = black ? ranks[7 - r] : ranks[r], sq = file + rank;
-    const light = (files.indexOf(file) + +rank) % 2 === 1, pc = pos[sq];
-    const cls = ["sq", light ? "l" : "d", last.includes(sq) ? "last" : "", state.sel === sq ? "sel" : "", kingInCheck === sq ? "check" : ""].join(" ");
-    html += `<div class="${cls}" data-sq="${sq}">` +
-      (pc ? `<span class="p ${pc === pc.toUpperCase() ? "w" : "b"}">${GLYPH[pc.toLowerCase()]}︎</span>` : "") +
-      (targets.includes(sq) ? (pc ? `<span class="ring"></span>` : `<span class="dot"></span>`) : "") +
-      (r === 7 ? `<span class="cf">${file}</span>` : "") + (f === 0 ? `<span class="cr">${rank}</span>` : "") + `</div>`;
+// ход на доске сразу, не дожидаясь сервера: рокировка, взятие на проходе, превращение
+function applyMove(pos, uci) {
+  const p = { ...pos }, from = uci.slice(0, 2), to = uci.slice(2, 4), pc = p[from];
+  if (!pc) return p;
+  const t = pc.toLowerCase(), white = pc === pc.toUpperCase();
+  if (t === "p" && from[0] !== to[0] && !p[to]) delete p[to[0] + from[1]];          // на проходе
+  if (t === "k" && Math.abs(FILES.indexOf(to[0]) - FILES.indexOf(from[0])) === 2) {  // рокировка: ладья тоже
+    const kingSide = to[0] === "g", r = from[1];
+    p[(kingSide ? "f" : "d") + r] = p[(kingSide ? "h" : "a") + r]; delete p[(kingSide ? "h" : "a") + r];
   }
-  return `<div class="board" id="board">${html}</div>`;
+  delete p[from];
+  p[to] = uci[4] ? (white ? uci[4].toUpperCase() : uci[4]) : pc;
+  return p;
+}
+// съеденные фигуры: чьи и сколько, и перевес по материалу
+function captured(pos) {
+  const cnt = { w: {}, b: {} };
+  for (const pc of Object.values(pos)) { const c = pc === pc.toUpperCase() ? "w" : "b", t = pc.toLowerCase(); cnt[c][t] = (cnt[c][t] || 0) + 1; }
+  const lost = c => Object.keys(START).flatMap(t => Array(Math.max(0, START[t] - (cnt[c][t] || 0))).fill(t));
+  const mat = c => Object.entries(cnt[c]).reduce((a, [t, n]) => a + VAL[t] * n, 0);
+  return { white: lost("b"), black: lost("w"), diff: mat("w") - mat("b") };
+}
+
+let shown = null, pieceEls = {}, drag = null;
+const flipped = () => state.game && state.game.you === "black";
+function sqXY(sq) {  // клетка -> (столбец, ряд) на экране
+  const c = FILES.indexOf(sq[0]), r = 8 - +sq[1];
+  return flipped() ? [7 - c, 7 - r] : [c, r];
+}
+function sqAt(board, x, y) {
+  const rc = board.getBoundingClientRect(), s = rc.width / 8;
+  let c = Math.floor((x - rc.left) / s), r = Math.floor((y - rc.top) / s);
+  if (c < 0 || c > 7 || r < 0 || r > 7) return null;
+  if (flipped()) { c = 7 - c; r = 7 - r; }
+  return FILES[c] + (8 - r);
+}
+function place(el, sq) { const [c, r] = sqXY(sq); el.style.transform = `translate(${c * 100}%, ${r * 100}%)`; }
+// фигуры на доске приводим к позиции pos: оставшиеся на месте не трогаем, сходившие едут, съеденные тают
+function drawPieces(pos, hintFrom) {
+  const layer = document.getElementById("pieces");
+  if (!layer) return;
+  const want = { ...pos }, next = {}, old = { ...pieceEls };
+  for (const sq of Object.keys(want)) if (old[sq] && old[sq].dataset.p === want[sq]) { next[sq] = old[sq]; delete old[sq]; delete want[sq]; }
+  for (const sq of Object.keys(want)) {
+    const cands = Object.keys(old).filter(o => old[o].dataset.p === want[sq] && pos[o] !== want[sq]);
+    if (!cands.length) continue;
+    const from = cands.includes(hintFrom) ? hintFrom
+      : cands.sort((a, b) => Math.hypot(...sqXY(a).map((v, i) => v - sqXY(sq)[i])) - Math.hypot(...sqXY(b).map((v, i) => v - sqXY(sq)[i])))[0];
+    next[sq] = old[from]; delete old[from]; delete want[sq];
+    next[sq].classList.add("front"); place(next[sq], sq);
+    setTimeout(() => next[sq] && next[sq].classList.remove("front"), 260);
+  }
+  for (const sq of Object.keys(want)) {  // новые (превращение, начало партии)
+    const el = document.createElement("div"), pc = want[sq];
+    el.className = "pc " + (pc === pc.toUpperCase() ? "w" : "b"); el.dataset.p = pc;
+    el.textContent = GLYPH[pc.toLowerCase()] + "︎";
+    el.style.transition = "none"; place(el, sq); layer.appendChild(el);
+    requestAnimationFrame(() => { el.style.transition = ""; });
+    next[sq] = el;
+  }
+  for (const el of Object.values(old)) { el.classList.add("gone"); setTimeout(() => el.remove(), 220); }  // съеденные
+  pieceEls = next; shown = pos;
+}
+function squaresHTML(g, last) {
+  const sel = state.sel, targets = sel ? g.legal.filter(m => m.startsWith(sel)).map(m => m.slice(2, 4)) : [];
+  const king = g.check && !state.pending ? Object.keys(shown).find(s => shown[s] === (g.turn === "white" ? "K" : "k")) : "";
+  let html = "";
+  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+    const file = flipped() ? FILES[7 - c] : FILES[c], rank = flipped() ? r + 1 : 8 - r, sq = file + rank;
+    const cls = ["sq", (c + r) % 2 ? "d" : "l", last.includes(sq) ? "last" : "", sel === sq ? "sel" : "", king === sq ? "check" : ""].join(" ");
+    html += `<div class="${cls}">` + (targets.includes(sq) ? (shown[sq] ? `<span class="ring"></span>` : `<span class="dot"></span>`) : "") +
+      (r === 7 ? `<span class="cf">${file}</span>` : "") + (c === 0 ? `<span class="cr">${rank}</span>` : "") + `</div>`;
+  }
+  return html;
+}
+function takenHTML(color) {
+  const cap = captured(shown || {}), list = cap[color], adv = color === "white" ? cap.diff : -cap.diff;
+  const pc = t => color === "white" ? t : t.toUpperCase();
+  return `<div class="taken">${list.map(t => `<span class="${pc(t) === t ? "b" : "w"}">${GLYPH[t]}︎</span>`).join("")}` +
+    (adv > 0 ? `<b>+${adv}</b>` : "") + `</div>`;
 }
 function playerBar(p, color, turn) {
   if (!p) return `<div class="player"><div class="av">?</div><div class="who"><b>…</b></div></div>`;
-  if (p.bot) return `<div class="player${turn ? " turn" : ""}"><div class="av ${color === "white" ? "w" : "b"}">🤖</div>
-    <div class="who"><b>${esc(p.name)}</b><small>${esc(T.botNote.split(":")[0])}</small></div></div>`;
-  return `<div class="player${turn ? " turn" : ""}"><div class="av ${color === "white" ? "w" : "b"}">${esc((p.name || "?")[0])}</div>
-    <div class="who">${playerLine(p)}</div><div class="rt">${p.rating}</div></div>`;
+  const name = p.bot ? `<b>${esc(p.name)}</b>` : `<b>${esc(p.name)}</b><small>${esc(p.faculty || T.noFac)}</small>`;
+  return `<div class="player${turn ? " turn" : ""}"><div class="av ${color === "white" ? "w" : "b"}">${p.bot ? "🤖" : esc((p.name || "?")[0])}</div>
+    <div class="who">${name}${takenHTML(color)}</div>${p.bot ? "" : `<div class="rt">${p.rating}</div>`}</div>`;
 }
 function inviteLink(id) { return BOT ? `https://t.me/${BOT}?start=chess_${id}` : ""; }
 function share(id) {
@@ -285,91 +367,160 @@ function share(id) {
   const url = `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(T.inviteText)}`;
   if (tg && tg.openTelegramLink) tg.openTelegramLink(url); else window.open(url, "_blank");
 }
-function gameHTML() {
-  const g = state.game;
-  const backBtn = `<button class="btn small" id="b-back" style="width:auto;margin:0 0 10px;padding:8px 14px">${T.back}</button>`;
-  if (g.status === "wait") {
-    const friend = g.kind === "invite";
-    return backBtn + `<div class="card wait"><div class="big">${friend ? "🤝" : "🔍"}</div>
-      <h2 style="justify-content:center">${friend ? T.waitFriend : T.searching}</h2>
-      <div class="muted">${friend ? T.waitFriendSub : T.searchingSub}</div>
-      ${friend && g.mine ? `<button class="btn red" id="b-share">${T.share}</button>` : ""}
-      ${g.mine ? `<button class="btn" id="b-cancel">${T.cancel}</button>` : ""}</div>`;
-  }
-  const me = g.you || "white", opp = me === "white" ? "black" : "white";
+const backBtn = () => `<button class="btn small" id="b-back" style="width:auto;margin:0 0 10px;padding:8px 14px">${T.back}</button>`;
+function waitHTML(g) {
+  const friend = g.kind === "invite";
+  return backBtn() + `<div class="card wait"><div class="big">${friend ? "🤝" : "🔍"}</div>
+    <h2 style="justify-content:center">${friend ? T.waitFriend : T.searching}</h2>
+    <div class="muted">${friend ? T.waitFriendSub : T.searchingSub}</div>
+    ${friend && g.mine ? `<button class="btn red" id="b-share">${T.share}</button>` : ""}
+    ${g.mine ? `<button class="btn" id="b-cancel">${T.cancel}</button>` : ""}</div>`;
+}
+// каркас партии строится один раз — дальше меняются только части, а фигуры живут и ездят
+function skeleton(g) {
+  shown = null; pieceEls = {};
+  return backBtn() + `<div id="drawask"></div><div class="card" style="padding:12px">
+    <div id="bar-top"></div>
+    <div class="board" id="board"><div class="squares" id="squares"></div><div class="pieces" id="pieces"></div></div>
+    <div id="bar-bottom"></div>
+    <div class="status" id="status"></div>
+    <div class="promo" id="promo">${["q", "r", "b", "n"].map(p => `<button data-p="${p}">${GLYPH[p]}︎</button>`).join("")}</div>
+    <div id="actions"></div></div>`;
+}
+function update(animateFrom) {
+  const g = state.game, $ = id => document.getElementById(id);
+  if (!$("board")) return;
+  const me = g.you || "white", opp = me === "white" ? "black" : "white", bot = g.kind === "bot";
+  if (!state.pending) drawPieces(parseFen(g.fen), animateFrom);
+  const last = state.pending ? [state.pending.slice(0, 2), state.pending.slice(2, 4)] : g.last ? [g.last.slice(0, 2), g.last.slice(2, 4)] : [];
+  $("squares").innerHTML = squaresHTML(g, last);
+  const turn = state.pending ? opp : g.turn;
+  $("bar-top").innerHTML = playerBar(g[opp], opp, g.status === "play" && turn === opp);
+  $("bar-bottom").innerHTML = playerBar(g[me], me, g.status === "play" && turn === me);
   let status = "", cls = "";
   if (g.status === "over") {
     const won = (g.result === "1-0" && me === "white") || (g.result === "0-1" && me === "black");
     const reason = T.reasons[g.reason] || g.reason;
     if (g.result === "1/2-1/2") status = `${T.draw} · ${reason}`;
     else { status = `${won ? T.win : T.lose} · ${reason}`; cls = won ? "win" : "lose"; }
-  } else status = (state.thinking ? T.botThinks : g.your_turn ? T.yourTurn : T.theirTurn) + (g.check && !state.thinking ? " · " + T.check : "");
-  const bot = g.kind === "bot";
-  const draw = g.status === "play" && g.you ? (g.draw_offer === "them"
-    ? `<div class="card" style="text-align:center"><b>${T.drawAsk}</b><div class="row"><button class="btn small red" id="b-acc">${T.accept}</button>
-        <button class="btn small" id="b-dec">${T.decline}</button></div></div>` : "") : "";
-  const actions = (g.status === "play" && g.you ? `<div class="row">${bot ? "" : `<button class="btn small" id="b-draw"${g.draw_offer === "you" ? " disabled" : ""}>
+  } else if (state.pending) status = bot ? T.botThinks : T.theirTurn;
+  else status = (g.your_turn ? T.yourTurn : T.theirTurn) + (g.check ? " · " + T.check : "");
+  $("status").className = "status " + cls; $("status").textContent = status;
+  $("drawask").innerHTML = g.status === "play" && g.you && g.draw_offer === "them" ? `<div class="card" style="text-align:center"><b>${T.drawAsk}</b>
+    <div class="row"><button class="btn small red" id="b-acc">${T.accept}</button><button class="btn small" id="b-dec">${T.decline}</button></div></div>` : "";
+  $("actions").innerHTML = (g.status === "play" && g.you ? `<div class="row">${bot ? "" : `<button class="btn small" id="b-draw"${g.draw_offer === "you" ? " disabled" : ""}>
       ${g.draw_offer === "you" ? T.drawSent : T.offerDraw}</button>`}<button class="btn small" id="b-resign">${T.resign}</button></div>` : "")
     + (bot && g.status === "over" ? `<div class="muted" style="text-align:center;margin-top:6px">${T.botNote}</div>` : "");
-  return backBtn + draw + `<div class="card" style="padding:12px">
-    ${playerBar(g[opp], opp, g.status === "play" && g.turn === opp)}
-    ${boardHTML(g)}
-    ${playerBar(g[me], me, g.status === "play" && g.turn === me)}
-    <div class="status ${cls}">${esc(status)}</div>
-    <div class="promo" id="promo">${["q", "r", "b", "n"].map(p => `<button data-p="${p}">${GLYPH[p]}︎</button>`).join("")}</div>
-    ${actions}</div>`;
+  if ($("b-resign")) $("b-resign").onclick = () => {
+    const go = ok => ok && act({ action: "resign" });
+    if (tg && tg.showConfirm) tg.showConfirm(T.sureResign, go); else go(confirm(T.sureResign));
+  };
+  if ($("b-draw")) $("b-draw").onclick = () => act({ action: "offer" });
+  if ($("b-acc")) $("b-acc").onclick = () => act({ action: "accept" });
+  if ($("b-dec")) $("b-dec").onclick = () => act({ action: "decline" });
 }
 
 async function act(body) {
-  // с ботом его ответ приходит в том же запросе — пока он думает, так и пишем
-  state.thinking = state.game.kind === "bot" && body.action === "move";
-  if (state.thinking) render();
-  try {
-    state.game = await api("/api/act", { id: state.game.id, ...body });
-  } catch (e) { showErr(e.message); }
-  state.thinking = false;
-  render();
+  try { state.game = await api("/api/act", { id: state.game.id, ...body }); } catch (e) { showErr(e.message); }
+  update();
 }
-function onSquare(sq) {
+async function makeMove(uci) {
   const g = state.game;
-  if (!g || !g.your_turn || state.thinking) return;
-  if (state.sel) {
-    const opts = g.legal.filter(m => m.startsWith(state.sel + sq));
-    if (opts.length > 1) { state.promo = state.sel + sq; render(); document.getElementById("promo").classList.add("on"); return; }
-    if (opts.length === 1) { const uci = opts[0]; state.sel = null; haptic("light"); act({ action: "move", uci }); return; }
+  state.sel = null; state.promo = null; document.getElementById("promo").classList.remove("on");
+  drawPieces(applyMove(shown, uci), uci.slice(0, 2));  // сразу на доске
+  state.pending = uci; haptic("light"); update();
+  try {
+    const before = shown;
+    state.game = await api("/api/act", { id: g.id, action: "move", uci });
+    state.pending = null;
+    // ответ бота пришёл вместе с нашим ходом — даём своему ходу доехать, потом едет бот
+    if (state.game.kind === "bot" && state.game.last && state.game.last !== uci) await new Promise(r => setTimeout(r, 250));
+    if (shown === before) update(state.game.last ? state.game.last.slice(0, 2) : undefined);
+  } catch (e) {
+    state.pending = null; showErr(e.message);
+    try { state.game = await api("/api/game?id=" + encodeURIComponent(g.id)); } catch (e2) {}
+    update();
   }
-  const mine = g.legal.some(m => m.startsWith(sq));
+}
+function tryMove(from, to) {
+  const opts = state.game.legal.filter(m => m.startsWith(from + to));
+  if (!opts.length) return false;
+  if (opts.length > 1) {  // превращение пешки — выбор фигуры
+    state.promo = from + to; state.sel = from; update();
+    document.getElementById("promo").classList.add("on");
+    return true;
+  }
+  makeMove(opts[0]);
+  return true;
+}
+const canMove = () => state.game && state.game.your_turn && !state.pending;
+function onTap(sq) {
+  if (!canMove()) return;
+  if (state.sel && state.sel !== sq && tryMove(state.sel, sq)) return;
+  const mine = state.game.legal.some(m => m.startsWith(sq));
   state.sel = mine && state.sel !== sq ? sq : null;
   if (state.sel) haptic("sel");
-  render();
+  update();
+}
+function bindBoard() {
+  const board = document.getElementById("board");
+  board.addEventListener("pointerdown", e => {
+    const sq = sqAt(board, e.clientX, e.clientY);
+    if (!sq) return;
+    if (canMove() && pieceEls[sq] && state.game.legal.some(m => m.startsWith(sq))) {
+      drag = { from: sq, el: pieceEls[sq], x: e.clientX, y: e.clientY, moved: false, wasSel: state.sel === sq };
+      board.setPointerCapture(e.pointerId);
+      if (state.sel !== sq) { state.sel = sq; haptic("sel"); update(); }
+    } else onTap(sq);
+  });
+  board.addEventListener("pointermove", e => {
+    if (!drag) return;
+    if (!drag.moved && Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < 6) return;
+    drag.moved = true;
+    const rc = board.getBoundingClientRect(), s = rc.width / 8;
+    drag.el.classList.add("drag");
+    drag.el.style.transform = `translate(${e.clientX - rc.left - s / 2}px, ${e.clientY - rc.top - s / 2}px) scale(1.18)`;
+  });
+  const end = e => {
+    if (!drag) return;
+    const d = drag; drag = null;
+    d.el.classList.remove("drag");
+    if (!d.moved) {  // просто касание: выбрали фигуру; повторное касание той же — снять выбор
+      if (d.wasSel) { state.sel = null; update(); }
+      return;
+    }
+    const to = sqAt(board, e.clientX, e.clientY);
+    place(d.el, d.from);   // вернуть на место (если ход есть — тут же уедет на новую клетку)
+    if (to && to !== d.from && tryMove(d.from, to)) return;
+  };
+  board.addEventListener("pointerup", end);
+  board.addEventListener("pointercancel", end);
+  new ResizeObserver(() => board.style.setProperty("--sq", board.clientWidth / 8 + "px")).observe(board);
+  document.querySelectorAll("#promo button").forEach(b => b.onclick = () => makeMove(state.promo + b.dataset.p));
 }
 
 function render() {
   const app = document.getElementById("app");
   if (!(tg && tg.initData)) { app.innerHTML = `<h1>${T.title}</h1><div class="card muted">${T.noTg}</div>`; return; }
   if (state.view === "game" && state.game) {
-    app.innerHTML = gameHTML();
     const g = state.game;
-    const $ = id => document.getElementById(id);
-    $("b-back").onclick = () => { state.view = "lobby"; state.game = null; state.sel = null; render(); tick(); };
-    if ($("b-share")) $("b-share").onclick = () => share(g.id);
-    if ($("b-cancel")) $("b-cancel").onclick = async () => {
-      try { await api("/api/act", { id: g.id, action: "cancel" }); } catch (e) {}
-      state.view = "lobby"; state.game = null; render(); tick();
+    if (g.status === "wait") {
+      app.innerHTML = waitHTML(g);
+      if (document.getElementById("b-share")) document.getElementById("b-share").onclick = () => share(g.id);
+      if (document.getElementById("b-cancel")) document.getElementById("b-cancel").onclick = async () => {
+        try { await api("/api/act", { id: g.id, action: "cancel" }); } catch (e) {}
+        state.view = "lobby"; state.game = null; render(); tick();
+      };
+    } else if (!document.getElementById("board") || app.dataset.game !== g.id) {
+      app.innerHTML = skeleton(g); app.dataset.game = g.id;
+      bindBoard(); update();
+    } else update();
+    document.getElementById("b-back").onclick = () => {
+      state.view = "lobby"; state.game = null; state.sel = null; app.dataset.game = ""; render(); tick();
     };
-    if ($("board")) $("board").onclick = e => { const s = e.target.closest("[data-sq]"); if (s) onSquare(s.dataset.sq); };
-    document.querySelectorAll("#promo button").forEach(b => b.onclick = () => {
-      const uci = state.promo + b.dataset.p; state.promo = null; state.sel = null; act({ action: "move", uci });
-    });
-    if ($("b-resign")) $("b-resign").onclick = () => {
-      const go = ok => ok && act({ action: "resign" });
-      if (tg && tg.showConfirm) tg.showConfirm(T.sureResign, go); else go(confirm(T.sureResign));
-    };
-    if ($("b-draw")) $("b-draw").onclick = () => act({ action: "offer" });
-    if ($("b-acc")) $("b-acc").onclick = () => act({ action: "accept" });
-    if ($("b-dec")) $("b-dec").onclick = () => act({ action: "decline" });
     return;
   }
+  app.dataset.game = "";
   app.innerHTML = lobbyHTML();
   document.getElementById("b-search").onclick = () => start("search");
   document.getElementById("b-invite").onclick = () => start("invite");
