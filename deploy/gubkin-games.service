@@ -1,0 +1,15 @@
+[Unit]
+Description=Gubkin mini games server (chess) for the mini app
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=gubkin
+WorkingDirectory=/opt/gubkin-bot/gubkin_schedule_bot
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/gubkin-bot/venv/bin/python games.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

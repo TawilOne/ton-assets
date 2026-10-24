@@ -1,0 +1,633 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Мини-игры</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: #000; --surface: #0f0f11; --surface-2: #17171a; --line: rgba(255,255,255,.08);
+    --text: #f5f5f7; --muted: #8a8a93; --red: #ff0000; --blue: #3d8bff; --green: #34c759; --radius: 22px;
+    --sq-light: #3b3b47; --sq-dark: #23232b;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { background: var(--bg); touch-action: pan-x pan-y; }
+  body {
+    margin: 0; color: var(--text); font: 15px/1.45 Inter, -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+    padding: max(16px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom)); min-height: 100vh;
+    background: radial-gradient(600px 300px at 85% -60px, rgba(255,0,0,.16), transparent 70%),
+                radial-gradient(500px 260px at -10% 0, rgba(61,139,255,.10), transparent 70%), var(--bg);
+    background-attachment: fixed;
+  }
+  /* вкладки «Где пара / Игры» — как в index.html */
+  .tabs { display: flex; gap: 4px; padding: 4px; margin: 0 0 14px; border-radius: 14px; background: var(--surface-2);
+          border: 1px solid var(--line); }
+  .tabs a { flex: 1; text-align: center; padding: 8px 6px; border-radius: 10px; color: var(--muted);
+            text-decoration: none; font-weight: 700; font-size: 14px; }
+  .tabs a.on { background: #fff; color: #000; }
+  h1 { margin: 2px 2px 14px; font-size: 30px; font-weight: 800; letter-spacing: -.03em; }
+  .card { background: linear-gradient(180deg, rgba(255,255,255,.045), rgba(255,255,255,.015));
+          border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; margin-bottom: 12px; }
+  .card h2 { margin: 0 0 12px; font-size: 17px; font-weight: 700; display: flex; justify-content: space-between; }
+  .card h2 span { color: var(--muted); font-size: 13px; font-weight: 500; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .btn { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; padding: 14px;
+         border-radius: 16px; border: 1px solid var(--line); background: var(--surface-2); color: var(--text);
+         font: 700 16px Inter, system-ui, sans-serif; margin-top: 10px; cursor: pointer; }
+  .btn.red { background: var(--red); border-color: var(--red); }
+  .btn.small { padding: 10px; font-size: 14px; border-radius: 13px; }
+  .btn:active { transform: scale(.98); }
+  .row { display: flex; gap: 8px; } .row .btn { flex: 1; }
+  .hero { display: flex; align-items: center; gap: 14px; }
+  .hero .ico { font-size: 40px; line-height: 1; }
+  .hero b { font-size: 20px; display: block; }
+  .stat { display: flex; gap: 8px; margin-top: 12px; }
+  .stat div { flex: 1; text-align: center; padding: 10px 4px; border-radius: 14px; background: var(--surface-2); }
+  .stat b { display: block; font-size: 18px; } .stat small { color: var(--muted); font-size: 12px; }
+  .list .item { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line); }
+  .list .item:first-child { border-top: 0; }
+  .list .place { width: 26px; text-align: center; font-weight: 800; color: var(--muted); }
+  .list .who { flex: 1; min-width: 0; } .list .who b { display: block; }
+  .list .who small, .list .who span { color: var(--muted); font-size: 12px; display: block;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .list .num { text-align: right; font-variant-numeric: tabular-nums; } .list .num b { display: block; }
+  .list .num small { color: var(--muted); font-size: 12px; }
+  .list .item.me { background: rgba(255,0,0,.10); border-radius: 12px; padding: 10px 8px; margin: 0 -8px; }
+  .list .item.tap { cursor: pointer; }
+  /* партия */
+  .player { display: flex; align-items: center; gap: 10px; padding: 10px 2px; }
+  .player .av { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; font-weight: 800;
+                background: var(--surface-2); border: 1px solid var(--line); }
+  .player .av.w { background: #f5f5f7; color: #000; } .player .av.b { background: #0a0a0c; color: #fff; }
+  .av { position: relative; overflow: hidden; }
+  .av img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
+  /* цвет фигур игрока — тонкой рамкой вокруг аватарки */
+  .player .av.w:has(img) { box-shadow: 0 0 0 2px #f5f5f7; } .player .av.b:has(img) { box-shadow: 0 0 0 2px #55555f; }
+  .player.turn .av.w:has(img), .player.turn .av.b:has(img) { box-shadow: 0 0 0 3px var(--red); }
+  .list .av { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; flex: none;
+              font-weight: 800; font-size: 13px; background: var(--surface-2); border: 1px solid var(--line); }
+  .player .who { flex: 1; min-width: 0; } .player .who b { display: block; }
+  .player .who small { color: var(--muted); font-size: 12px; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .player .rt { color: var(--muted); font-variant-numeric: tabular-nums; font-weight: 700; }
+  .player.turn .av { box-shadow: 0 0 0 3px var(--red); }
+  /* доска целиком в экране и в альбомной ориентации: не выше экрана минус полоски игроков */
+  .board { display: grid; grid-template-columns: repeat(8, 1fr); grid-template-rows: repeat(8, 1fr); width: 100%; max-width: min(440px, calc(100vh - 190px));
+           min-width: 220px; margin: 0 auto;
+           aspect-ratio: 1; border-radius: 12px; overflow: hidden; border: 1px solid var(--line); user-select: none; }
+  .board { position: relative; display: block; touch-action: none; }
+  .board .squares { position: absolute; inset: 0; display: grid; grid-template-columns: repeat(8, 1fr); grid-template-rows: repeat(8, 1fr); }
+  .board .pieces { position: absolute; inset: 0; pointer-events: none; }
+  .pc { position: absolute; left: 0; top: 0; width: 12.5%; height: 12.5%; display: grid; place-items: center;
+        font: calc(var(--sq, 40px) * .8)/1 "Segoe UI Symbol", "Apple Symbols", "DejaVu Sans", sans-serif;
+        transition: transform .2s cubic-bezier(.2, .7, .3, 1), opacity .2s; will-change: transform; z-index: 1; }
+  .pc.w { color: #f7f7fa; text-shadow: 0 0 1px #000, 0 1px 2px rgba(0,0,0,.8); }
+  .pc.b { color: #0b0b0e; -webkit-text-stroke: .7px #c4c4d0; text-shadow: 0 1px 2px rgba(0,0,0,.6); }
+  .pc.front { z-index: 3; }
+  .pc.drag { transition: none; z-index: 5; filter: drop-shadow(0 6px 10px rgba(0,0,0,.6)); }
+  .pc.gone { opacity: 0; }
+  .taken { display: flex; align-items: center; flex-wrap: wrap; min-height: 16px; margin-top: 2px; font-size: 14px; line-height: 1;
+           font-family: "Segoe UI Symbol", "Apple Symbols", "DejaVu Sans", sans-serif; }
+  .taken span { margin-right: -3px; }
+  .taken span.w { color: #f7f7fa; text-shadow: 0 0 1px #000; } .taken span.b { color: #0b0b0e; -webkit-text-stroke: .6px #c4c4d0; }
+  .taken b { margin-left: 8px; font: 700 12px Inter, system-ui, sans-serif; color: var(--muted); }
+  .sq { position: relative; min-height: 0; transition: box-shadow .15s; display: grid; place-items: center; font-size: min(9vw, 40px, calc((100vh - 190px) / 9)); line-height: 1; cursor: pointer; }
+  .sq.l { background: var(--sq-light); } .sq.d { background: var(--sq-dark); }
+  .sq.last { box-shadow: inset 0 0 0 100px rgba(61,139,255,.22); }
+  .sq.sel { box-shadow: inset 0 0 0 100px rgba(255,0,0,.35); }
+  .sq.check { box-shadow: inset 0 0 0 100px rgba(255,0,0,.55); }
+  .sq .p { font-family: "Segoe UI Symbol", "Apple Symbols", "DejaVu Sans", sans-serif; }
+  .sq .p.w { color: #f7f7fa; text-shadow: 0 0 1px #000, 0 1px 2px rgba(0,0,0,.8); }
+  .sq .p.b { color: #050507; text-shadow: 0 0 1px #9a9aa6, 0 0 2px rgba(255,255,255,.35); }
+  .sq .dot { position: absolute; width: 28%; height: 28%; border-radius: 50%; background: rgba(255,0,0,.55); }
+  .sq .ring { position: absolute; inset: 6%; border-radius: 50%; border: 3px solid rgba(255,0,0,.6); }
+  .sq .cf, .sq .cr { position: absolute; font-size: 9px; color: rgba(255,255,255,.35); font-weight: 700; }
+  .sq .cf { right: 3px; bottom: 1px; } .sq .cr { left: 3px; top: 1px; }
+  .status { text-align: center; font-weight: 700; margin: 12px 0 2px; min-height: 22px; }
+  .status.win { color: var(--green); } .status.lose { color: #ff6060; }
+  .promo { display: none; gap: 8px; justify-content: center; margin-top: 10px; }
+  .promo.on { display: flex; }
+  .promo button { font-size: 32px; width: 56px; height: 56px; border-radius: 14px; border: 1px solid var(--line);
+                  background: var(--surface-2); color: var(--text); }
+  .err { position: fixed; left: 16px; right: 16px; bottom: max(16px, env(safe-area-inset-bottom)); padding: 12px 14px;
+         border-radius: 14px; background: #3a1214; border: 1px solid rgba(255,0,0,.4); display: none; z-index: 9; }
+  .err.on { display: block; }
+  .wait { text-align: center; padding: 10px 0; }
+  .notif { display: flex; align-items: center; gap: 12px; width: 100%; margin-top: 14px; padding: 12px 14px; text-align: left;
+           background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.08); border-radius: 16px; color: var(--text);
+           font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+  .notif span { flex: 1; min-width: 0; }
+  .notif b { display: block; font-size: 14px; font-weight: 600; }
+  .notif small { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .notif i { flex: none; position: relative; width: 46px; height: 28px; border-radius: 14px; background: #3a3a40; transition: background .2s; }
+  .notif i::after { content: ""; position: absolute; top: 3px; left: 3px; width: 22px; height: 22px; border-radius: 50%;
+                    background: #fff; transition: transform .2s; }
+  .notif.on i { background: var(--green); }
+  .notif.on i::after { transform: translateX(18px); }
+  .seeking { text-align: center; font-size: 13px; color: var(--muted); margin: 12px 0 -2px; }
+  .seeking.on { color: var(--text); }
+  .seeking b { font-weight: 700; }
+  .seeking i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--green); margin-right: 7px;
+               vertical-align: 1px; animation: blink 1.6s ease-in-out infinite; }
+  @keyframes blink { 50% { opacity: .3; } }
+  .away { text-align: center; padding: 12px 14px; border-color: rgba(255,194,77,.35); background: rgba(255,194,77,.08);
+          color: #ffd27a; font-weight: 600; font-size: 14px; }
+  .wait .big { font-size: 44px; animation: bob 1.4s ease-in-out infinite; }
+  @keyframes bob { 50% { transform: translateY(-6px); } }
+</style>
+</head>
+<body>
+<div class="tabs"><a id="tab-where" href="index.html">📍 <span id="t-where">Где пара</span></a>
+  <a class="on" href="#">🎮 <span id="t-games">Игры</span></a></div>
+<div id="app"></div>
+<div class="err" id="err"></div>
+
+<script>
+const tg = window.Telegram && window.Telegram.WebApp;
+if (tg) {
+  tg.ready(); tg.expand();
+  try { tg.setHeaderColor("#000000"); tg.setBackgroundColor("#000000"); tg.BackButton && tg.BackButton.hide(); } catch (e) {}
+}
+const params = new URLSearchParams(location.search);
+const LANG = ["en", "fr"].includes(params.get("lg")) ? params.get("lg") : "ru";
+const L3 = (ru, en, fr) => (LANG === "en" ? en : LANG === "fr" ? fr : ru);
+const API = (params.get("api") || "https://153-76-167-68.sslip.io").replace(/\/$/, "");
+// имя бота — для ссылки-приглашения; бот передаёт его в адресе, запоминаем на случай перехода по вкладкам
+let BOT = params.get("bot") || "";
+try { if (BOT) sessionStorage.setItem("bot", BOT); else BOT = sessionStorage.getItem("bot") || ""; } catch (e) {}
+// вкладка «Где пара» — назад к расписанию, с которого пришли (там в адресе пары)
+try { const back = sessionStorage.getItem("where"); if (back) document.getElementById("tab-where").href = back; } catch (e) {}
+document.getElementById("t-where").textContent = L3("Где пара", "My class", "Mon cours");
+document.getElementById("t-games").textContent = L3("Игры", "Games", "Jeux");
+
+const T = {
+  title: L3("Мини-игры", "Mini games", "Mini-jeux"),
+  chess: L3("Шахматы", "Chess", "Échecs"),
+  chessSub: L3("Сыграйте со студентами вуза", "Play with students of the university", "Jouez avec les étudiants"),
+  search: L3("🔍 Найти соперника", "🔍 Find an opponent", "🔍 Trouver un adversaire"),
+  seeking: n => n ? L3(`<i></i>Сейчас ищут игру: <b>${n}</b>`, `<i></i>Looking for a game now: <b>${n}</b>`,
+                      `<i></i>Cherchent une partie : <b>${n}</b>`)
+                 : L3("Сейчас никто не ищет игру — начните первым", "Nobody is looking for a game right now — be the first",
+                      "Personne ne cherche de partie — soyez le premier"),
+  notify: L3("🔔 Сообщать, когда кто-то ищет игру", "🔔 Tell me when someone is looking for a game",
+             "🔔 Me prévenir quand quelqu'un cherche une partie"),
+  notifySub: L3("Бот пришлёт сообщение. Ночью не беспокоим", "The bot will message you. Never at night",
+                "Le bot vous écrira. Jamais la nuit"),
+  invite: L3("🤝 Играть с другом", "🤝 Play with a friend", "🤝 Jouer avec un ami"),
+  vsBot: L3("🤖 Сыграть с ботом", "🤖 Play the bot", "🤖 Jouer contre le bot"),
+  levels: [L3("🐣 Новичок", "🐣 Beginner", "🐣 Débutant"), L3("🙂 Средний", "🙂 Intermediate", "🙂 Intermédiaire"),
+           L3("🔥 Сильный", "🔥 Strong", "🔥 Fort")],
+  botNote: L3("Тренировка: партии с ботом не идут в рейтинг и статистику", "Practice: games with the bot don't count towards rating or stats",
+              "Entraînement : les parties contre le bot ne comptent ni pour le classement ni pour les statistiques"),
+  oppCancelled: L3("Соперник передумал — ищем другого", "Your opponent cancelled — looking for another one",
+                   "L'adversaire a annulé — on en cherche un autre"),
+  botThinks: L3("Бот думает…", "The bot is thinking…", "Le bot réfléchit…"),
+  oppAway: t => L3(`⏳ Соперник вышел из игры. Если не вернётся за ${t} — победа ваша`,
+                   `⏳ Your opponent left. If they don't return within ${t}, you win`,
+                   `⏳ L'adversaire est parti. S'il ne revient pas d'ici ${t}, vous gagnez`),
+  leaveRule: L3("Если выйти из партии больше чем на 3 минуты — засчитается поражение",
+                "Leaving the game for more than 3 minutes counts as a loss",
+                "Quitter la partie plus de 3 minutes compte comme une défaite"),
+  rating: L3("Рейтинг", "Rating", "Classement"), wins: L3("побед", "wins", "victoires"),
+  losses: L3("поражений", "losses", "défaites"), draws: L3("ничьих", "draws", "nuls"),
+  my: L3("Мои партии", "My games", "Mes parties"), top: L3("Рейтинг вуза", "University ranking", "Classement de l'université"),
+  topEmpty: L3("Пока никто не доиграл ни одной партии — будьте первым!", "No finished games yet — be the first!",
+               "Aucune partie terminée — soyez le premier !"),
+  noFac: L3("факультет не выбран", "faculty not chosen", "faculté non choisie"),
+  searching: L3("Ищем соперника…", "Looking for an opponent…", "Recherche d'un adversaire…"),
+  searchingSub: L3("Как только кто-то тоже нажмёт «Найти соперника», партия начнётся", "The game starts as soon as someone else searches too",
+                   "La partie commence dès qu'un autre joueur cherche aussi"),
+  waitFriend: L3("Ждём друга", "Waiting for your friend", "En attente de votre ami"),
+  waitFriendSub: L3("Отправьте другу ссылку — партия начнётся, когда он её откроет", "Send the link to your friend — the game starts when they open it",
+                    "Envoyez le lien à votre ami — la partie commence quand il l'ouvre"),
+  share: L3("📨 Отправить ссылку", "📨 Send the link", "📨 Envoyer le lien"),
+  cancel: L3("Отменить", "Cancel", "Annuler"), back: L3("‹ К играм", "‹ Games", "‹ Jeux"),
+  yourTurn: L3("Ваш ход", "Your move", "À vous de jouer"), theirTurn: L3("Ход соперника…", "Opponent's move…", "Au tour de l'adversaire…"),
+  check: L3("Шах!", "Check!", "Échec !"), resign: L3("🏳️ Сдаться", "🏳️ Resign", "🏳️ Abandonner"),
+  offerDraw: L3("🤝 Ничья?", "🤝 Offer a draw", "🤝 Proposer nul"),
+  drawSent: L3("Ничья предложена", "Draw offered", "Nul proposé"),
+  drawAsk: L3("Соперник предлагает ничью", "Your opponent offers a draw", "L'adversaire propose nul"),
+  accept: L3("Принять", "Accept", "Accepter"), decline: L3("Отказаться", "Decline", "Refuser"),
+  sureResign: L3("Точно сдаться?", "Resign for sure?", "Abandonner vraiment ?"),
+  win: L3("🏆 Победа!", "🏆 You won!", "🏆 Victoire !"), lose: L3("Поражение", "You lost", "Défaite"),
+  draw: L3("🤝 Ничья", "🤝 Draw", "🤝 Nul"),
+  reasons: { checkmate: L3("мат", "checkmate", "échec et mat"), resign: L3("сдача", "resignation", "abandon"),
+             time: L3("3 дня без хода", "no move for 3 days", "3 jours sans coup"), stalemate: L3("пат", "stalemate", "pat"),
+             agreement: L3("по согласию", "by agreement", "d'un commun accord"),
+             abandon: L3("игрок вышел из партии", "a player left the game", "un joueur a quitté la partie"),
+             insufficient_material: L3("мало фигур", "insufficient material", "matériel insuffisant"),
+             threefold_repetition: L3("троекратное повторение", "threefold repetition", "triple répétition"),
+             fivefold_repetition: L3("пятикратное повторение", "fivefold repetition", "quintuple répétition"),
+             fifty_moves: L3("50 ходов", "fifty-move rule", "règle des 50 coups"),
+             seventyfive_moves: L3("75 ходов", "75-move rule", "règle des 75 coups") },
+  playing: L3("идёт партия", "in progress", "en cours"), waiting: L3("ждём соперника", "waiting", "en attente"),
+  vs: L3("против", "vs", "contre"), noTg: L3("Откройте игры из Telegram — через бота", "Open the games from Telegram, via the bot",
+                                          "Ouvrez les jeux depuis Telegram, via le bot"),
+  offline: L3("Сервер игр не отвечает. Попробуйте чуть позже", "The game server isn't responding. Try again later",
+              "Le serveur de jeux ne répond pas. Réessayez plus tard"),
+  inviteText: L3("Сыграем в шахматы? ♟", "Fancy a game of chess? ♟", "Une partie d'échecs ? ♟"),
+  noBot: L3("Скопируйте ссылку и отправьте другу:", "Copy the link and send it to your friend:", "Copiez le lien et envoyez-le à votre ami :"),
+};
+
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const haptic = k => { try { tg && tg.HapticFeedback && (k === "sel" ? tg.HapticFeedback.selectionChanged() : tg.HapticFeedback.impactOccurred(k)); } catch (e) {} };
+function showErr(text) {
+  const e = document.getElementById("err"); e.textContent = text; e.classList.add("on");
+  clearTimeout(showErr.t); showErr.t = setTimeout(() => e.classList.remove("on"), 3500);
+}
+async function api(path, body) {
+  const init = (tg && tg.initData) || "";
+  let r;
+  try { r = await fetch(API + path, {
+    method: body ? "POST" : "GET",
+    headers: { "X-Init-Data": init, ...(body ? { "Content-Type": "application/json" } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+  }); } catch (e) { throw new Error(T.offline); }  // нет сети или сервер недоступен — понятными словами
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw Object.assign(new Error(data.error || T.offline), { status: r.status });
+  return data;
+}
+
+let state = { view: "lobby", game: null, me: null, games: [], top: [], sel: null, promo: null };
+let timer = null;
+function poll(ms) { clearTimeout(timer); timer = setTimeout(tick, ms); }
+async function tick() {
+  // свёрнутое приложение не спрашивает сервер: иначе на Android игрок считался бы «на месте»
+  if (document.hidden) { poll(2000); return; }
+  try {
+    if (state.view === "game" && state.game) {
+      const g = await api("/api/game?id=" + encodeURIComponent(state.game.id));
+      // пока наш ход летит на сервер или фигуру тащат — не мешаем
+      if (!state.pending && !drag && state.game && g.id === state.game.id && JSON.stringify(g) !== JSON.stringify(state.game)) {
+        const moved = g.last && g.last !== state.game.last;
+        if (g.status === "wait" && state.game.status === "play") showErr(T.oppCancelled);  // соперник передумал — ищем другого
+        if (g.your_turn && !state.game.your_turn) haptic("medium");
+        state.game = g;
+        if (state.game.status !== "wait" && document.getElementById("board")) update(moved ? g.last.slice(0, 2) : undefined);
+        else render();
+      }
+      poll(g.status === "over" ? 15000 : 2000);
+    } else {
+      // счётчик «ищут игру» — каждые 2 с лёгким запросом, весь список и рейтинг — раз в 8 с
+      if (!state.lobbyAt || Date.now() - state.lobbyAt > 7500) { await loadLobby(); state.lobbyAt = Date.now(); }
+      else showSeeking((await api("/api/searching")).searching || 0);
+      poll(2000);
+    }
+  } catch (e) {
+    if (e.status === 400 && state.view === "game") {  // партии больше нет (соперник отменил приглашение)
+      showErr(e.message); state.view = "lobby"; state.game = null; render(); poll(0);
+    } else poll(5000);
+  }
+}
+function showSeeking(n) {
+  const el = document.querySelector(".seeking");
+  if (n === state.searching && el) return;
+  state.searching = n;
+  if (el) { el.className = "seeking" + (n ? " on" : ""); el.innerHTML = T.seeking(n); }
+}
+async function loadLobby() {
+  const [me, top] = await Promise.all([api("/api/me"), api("/api/top")]);
+  state.me = me.me; state.notify = !!me.notify; state.games = me.games; state.top = top.top; state.searching = me.searching || 0;
+  if (state.view === "lobby") render();
+}
+
+// ---- лобби
+function playerLine(p) {
+  return `${esc(p.name)}<small>${esc(p.faculty || T.noFac)}</small>`;
+}
+function lobbyHTML() {
+  const me = state.me || { rating: 1200, wins: 0, losses: 0, draws: 0 };
+  const games = state.games.map(g => {
+    const opp = g.you === "white" ? g.black : g.you === "black" ? g.white : null;
+    const what = g.status === "wait" ? T.waiting : (g.your_turn ? "🔴 " + T.yourTurn : T.theirTurn);
+    return `<div class="item tap" data-g="${esc(g.id)}"><div class="place">♟</div><div class="who"><b>${opp ? T.vs + " " + esc(opp.name) : T.chess}</b>
+      <span>${esc(what)}</span></div><div class="num">›</div></div>`;
+  }).join("");
+  const top = state.top.map((p, i) => `<div class="item${state.me && p.id === state.me.id ? " me" : ""}">
+      <div class="place">${i < 3 ? ["🥇", "🥈", "🥉"][i] : i + 1}</div><div class="av">${avatar(p)}</div><div class="who">${playerLine(p)}</div>
+      <div class="num"><b>${p.rating}</b><small>${p.wins}–${p.losses}–${p.draws}</small></div></div>`).join("");
+  return `<h1>${T.title}</h1>
+    <div class="card"><div class="hero"><div class="ico">♟️</div><div><b>${T.chess}</b><span class="muted">${T.chessSub}</span></div></div>
+      <div class="stat"><div><b>${me.rating}</b><small>${T.rating}</small></div><div><b>${me.wins}</b><small>${T.wins}</small></div>
+        <div><b>${me.losses}</b><small>${T.losses}</small></div><div><b>${me.draws}</b><small>${T.draws}</small></div></div>
+      <div class="seeking${state.searching ? " on" : ""}">${T.seeking(state.searching)}</div>
+      <button class="btn red" id="b-search">${T.search}</button><button class="btn" id="b-invite">${T.invite}</button>
+      <button class="btn" id="b-bot">${T.vsBot}</button>
+      ${state.pickLevel ? `<div class="row">${T.levels.map((t, i) => `<button class="btn small" data-level="${i + 1}">${t}</button>`).join("")}</div>
+        <div class="muted" style="margin-top:8px">${T.botNote}</div>` : ""}
+      <button class="notif${state.notify ? " on" : ""}" id="b-notify" role="switch" aria-checked="${!!state.notify}">
+        <span><b>${T.notify}</b><small>${T.notifySub}</small></span><i></i></button></div>
+    ${games ? `<div class="card"><h2>${T.my}</h2><div class="list">${games}</div></div>` : ""}
+    <div class="card"><h2>${T.top}<span>${L3("победы–поражения–ничьи", "W–L–D", "V–D–N")}</span></h2>
+      ${top ? `<div class="list">${top}</div>` : `<div class="muted">${T.topEmpty}</div>`}</div>`;
+}
+
+// ---- партия: доска как на chess.com — фигуры плавно едут, свой ход виден сразу, можно перетаскивать
+const GLYPH = { k: "♚", q: "♛", r: "♜", b: "♝", n: "♞", p: "♟" };
+const VAL = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
+const START = { q: 1, r: 2, b: 2, n: 2, p: 8 };
+const FILES = "abcdefgh";
+function parseFen(fen) {
+  const out = {};
+  fen.split(" ")[0].split("/").forEach((row, i) => {
+    let f = 0;
+    for (const ch of row) { if (/\d/.test(ch)) f += +ch; else out[FILES[f++] + (8 - i)] = ch; }
+  });
+  return out;
+}
+// ход на доске сразу, не дожидаясь сервера: рокировка, взятие на проходе, превращение
+function applyMove(pos, uci) {
+  const p = { ...pos }, from = uci.slice(0, 2), to = uci.slice(2, 4), pc = p[from];
+  if (!pc) return p;
+  const t = pc.toLowerCase(), white = pc === pc.toUpperCase();
+  if (t === "p" && from[0] !== to[0] && !p[to]) delete p[to[0] + from[1]];          // на проходе
+  if (t === "k" && Math.abs(FILES.indexOf(to[0]) - FILES.indexOf(from[0])) === 2) {  // рокировка: ладья тоже
+    const kingSide = to[0] === "g", r = from[1];
+    p[(kingSide ? "f" : "d") + r] = p[(kingSide ? "h" : "a") + r]; delete p[(kingSide ? "h" : "a") + r];
+  }
+  delete p[from];
+  p[to] = uci[4] ? (white ? uci[4].toUpperCase() : uci[4]) : pc;
+  return p;
+}
+// съеденные фигуры: чьи и сколько, и перевес по материалу
+function captured(pos) {
+  const cnt = { w: {}, b: {} };
+  for (const pc of Object.values(pos)) { const c = pc === pc.toUpperCase() ? "w" : "b", t = pc.toLowerCase(); cnt[c][t] = (cnt[c][t] || 0) + 1; }
+  const lost = c => Object.keys(START).flatMap(t => Array(Math.max(0, START[t] - (cnt[c][t] || 0))).fill(t));
+  const mat = c => Object.entries(cnt[c]).reduce((a, [t, n]) => a + VAL[t] * n, 0);
+  return { white: lost("b"), black: lost("w"), diff: mat("w") - mat("b") };
+}
+
+let shown = null, pieceEls = {}, drag = null;
+const flipped = () => state.game && state.game.you === "black";
+function sqXY(sq) {  // клетка -> (столбец, ряд) на экране
+  const c = FILES.indexOf(sq[0]), r = 8 - +sq[1];
+  return flipped() ? [7 - c, 7 - r] : [c, r];
+}
+function sqAt(board, x, y) {
+  const rc = board.getBoundingClientRect(), s = rc.width / 8;
+  let c = Math.floor((x - rc.left) / s), r = Math.floor((y - rc.top) / s);
+  if (c < 0 || c > 7 || r < 0 || r > 7) return null;
+  if (flipped()) { c = 7 - c; r = 7 - r; }
+  return FILES[c] + (8 - r);
+}
+function place(el, sq) { const [c, r] = sqXY(sq); el.style.transform = `translate(${c * 100}%, ${r * 100}%)`; }
+// фигуры на доске приводим к позиции pos: оставшиеся на месте не трогаем, сходившие едут, съеденные тают
+function drawPieces(pos, hintFrom) {
+  const layer = document.getElementById("pieces");
+  if (!layer) return;
+  const want = { ...pos }, next = {}, old = { ...pieceEls };
+  for (const sq of Object.keys(want)) if (old[sq] && old[sq].dataset.p === want[sq]) { next[sq] = old[sq]; delete old[sq]; delete want[sq]; }
+  for (const sq of Object.keys(want)) {
+    const cands = Object.keys(old).filter(o => old[o].dataset.p === want[sq] && pos[o] !== want[sq]);
+    if (!cands.length) continue;
+    const from = cands.includes(hintFrom) ? hintFrom
+      : cands.sort((a, b) => Math.hypot(...sqXY(a).map((v, i) => v - sqXY(sq)[i])) - Math.hypot(...sqXY(b).map((v, i) => v - sqXY(sq)[i])))[0];
+    next[sq] = old[from]; delete old[from]; delete want[sq];
+    next[sq].classList.add("front"); place(next[sq], sq);
+    setTimeout(() => next[sq] && next[sq].classList.remove("front"), 260);
+  }
+  for (const sq of Object.keys(want)) {  // новые (превращение, начало партии)
+    const el = document.createElement("div"), pc = want[sq];
+    el.className = "pc " + (pc === pc.toUpperCase() ? "w" : "b"); el.dataset.p = pc;
+    el.textContent = GLYPH[pc.toLowerCase()] + "︎";
+    el.style.transition = "none"; place(el, sq); layer.appendChild(el);
+    requestAnimationFrame(() => { el.style.transition = ""; });
+    next[sq] = el;
+  }
+  for (const el of Object.values(old)) { el.classList.add("gone"); setTimeout(() => el.remove(), 220); }  // съеденные
+  pieceEls = next; shown = pos;
+}
+function squaresHTML(g, last) {
+  const sel = state.sel, targets = sel ? g.legal.filter(m => m.startsWith(sel)).map(m => m.slice(2, 4)) : [];
+  const king = g.check && !state.pending ? Object.keys(shown).find(s => shown[s] === (g.turn === "white" ? "K" : "k")) : "";
+  let html = "";
+  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+    const file = flipped() ? FILES[7 - c] : FILES[c], rank = flipped() ? r + 1 : 8 - r, sq = file + rank;
+    const cls = ["sq", (c + r) % 2 ? "d" : "l", last.includes(sq) ? "last" : "", sel === sq ? "sel" : "", king === sq ? "check" : ""].join(" ");
+    html += `<div class="${cls}">` + (targets.includes(sq) ? (shown[sq] ? `<span class="ring"></span>` : `<span class="dot"></span>`) : "") +
+      (r === 7 ? `<span class="cf">${file}</span>` : "") + (c === 0 ? `<span class="cr">${rank}</span>` : "") + `</div>`;
+  }
+  return html;
+}
+function takenHTML(color) {
+  const cap = captured(shown || {}), list = cap[color], adv = color === "white" ? cap.diff : -cap.diff;
+  const pc = t => color === "white" ? t : t.toUpperCase();
+  return `<div class="taken">${list.map(t => `<span class="${pc(t) === t ? "b" : "w"}">${GLYPH[t]}︎</span>`).join("")}` +
+    (adv > 0 ? `<b>+${adv}</b>` : "") + `</div>`;
+}
+// аватарка из Telegram; не загрузилась (нет фото, закрыто настройками, нет сети) — остаётся первая буква имени
+function avatar(p) {
+  const letter = esc((p.name || "?")[0]);
+  return p.photo ? `${letter}<img src="${esc(p.photo)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">` : letter;
+}
+function playerBar(p, color, turn) {
+  if (!p) return `<div class="player"><div class="av">?</div><div class="who"><b>…</b></div></div>`;
+  const name = p.bot ? `<b>${esc(p.name)}</b>` : `<b>${esc(p.name)}</b><small>${esc(p.faculty || T.noFac)}</small>`;
+  return `<div class="player${turn ? " turn" : ""}"><div class="av ${color === "white" ? "w" : "b"}">${p.bot ? "🤖" : avatar(p)}</div>
+    <div class="who">${name}${takenHTML(color)}</div>${p.bot ? "" : `<div class="rt">${p.rating}</div>`}</div>`;
+}
+function inviteLink(id) { return BOT ? `https://t.me/${BOT}?start=chess_${id}` : ""; }
+function share(id) {
+  const link = inviteLink(id);
+  if (!link) { prompt(T.noBot, location.href.split("?")[0] + "?g=" + id); return; }
+  const url = `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(T.inviteText)}`;
+  if (tg && tg.openTelegramLink) tg.openTelegramLink(url); else window.open(url, "_blank");
+}
+const backBtn = () => `<button class="btn small" id="b-back" style="width:auto;margin:0 0 10px;padding:8px 14px">${T.back}</button>`;
+function waitHTML(g) {
+  const friend = g.kind === "invite";
+  return backBtn() + `<div class="card wait"><div class="big">${friend ? "🤝" : "🔍"}</div>
+    <h2 style="justify-content:center">${friend ? T.waitFriend : T.searching}</h2>
+    <div class="muted">${friend ? T.waitFriendSub : T.searchingSub}</div>
+    ${friend && g.mine ? `<button class="btn red" id="b-share">${T.share}</button>` : ""}
+    ${g.mine ? `<button class="btn" id="b-cancel">${T.cancel}</button>` : ""}</div>`;
+}
+// каркас партии строится один раз — дальше меняются только части, а фигуры живут и ездят
+function skeleton(g) {
+  shown = null; pieceEls = {};
+  return backBtn() + `<div id="drawask"></div><div id="away"></div><div class="card" style="padding:12px">
+    <div id="bar-top"></div>
+    <div class="board" id="board"><div class="squares" id="squares"></div><div class="pieces" id="pieces"></div></div>
+    <div id="bar-bottom"></div>
+    <div class="status" id="status"></div>
+    <div class="promo" id="promo">${["q", "r", "b", "n"].map(p => `<button data-p="${p}">${GLYPH[p]}︎</button>`).join("")}</div>
+    <div id="actions"></div></div>`;
+}
+function update(animateFrom) {
+  const g = state.game, $ = id => document.getElementById(id);
+  if (!$("board")) return;
+  const me = g.you || "white", opp = me === "white" ? "black" : "white", bot = g.kind === "bot";
+  if (!state.pending) drawPieces(parseFen(g.fen), animateFrom);
+  const last = state.pending ? [state.pending.slice(0, 2), state.pending.slice(2, 4)] : g.last ? [g.last.slice(0, 2), g.last.slice(2, 4)] : [];
+  $("squares").innerHTML = squaresHTML(g, last);
+  const turn = state.pending ? opp : g.turn;
+  $("bar-top").innerHTML = playerBar(g[opp], opp, g.status === "play" && turn === opp);
+  $("bar-bottom").innerHTML = playerBar(g[me], me, g.status === "play" && turn === me);
+  let status = "", cls = "";
+  if (g.status === "over") {
+    const won = (g.result === "1-0" && me === "white") || (g.result === "0-1" && me === "black");
+    const reason = T.reasons[g.reason] || g.reason;
+    if (g.result === "1/2-1/2") status = `${T.draw} · ${reason}`;
+    else { status = `${won ? T.win : T.lose} · ${reason}`; cls = won ? "win" : "lose"; }
+  } else if (state.pending) status = bot ? T.botThinks : T.theirTurn;
+  else status = (g.your_turn ? T.yourTurn : T.theirTurn) + (g.check ? " · " + T.check : "");
+  $("status").className = "status " + cls; $("status").textContent = status;
+  $("drawask").innerHTML = g.status === "play" && g.you && g.draw_offer === "them" ? `<div class="card" style="text-align:center"><b>${T.drawAsk}</b>
+    <div class="row"><button class="btn small red" id="b-acc">${T.accept}</button><button class="btn small" id="b-dec">${T.decline}</button></div></div>` : "";
+  // соперник закрыл мини-приложение — показываем, через сколько ему засчитают поражение
+  const left = g.abandon - g.opp_away, mmss = `${Math.floor(Math.max(0, left) / 60)}:${String(Math.max(0, left) % 60).padStart(2, "0")}`;
+  $("away").innerHTML = g.status === "play" && !bot && g.opp_away >= 20
+    ? `<div class="card away">${esc(T.oppAway(mmss))}</div>` : "";
+  $("actions").innerHTML = (g.status === "play" && g.you && !bot ? `<div class="muted" style="text-align:center;margin:-4px 0 8px;font-size:12px">${T.leaveRule}</div>` : "")
+    + (g.status === "play" && g.you ? `<div class="row">${bot ? "" : `<button class="btn small" id="b-draw"${g.draw_offer === "you" ? " disabled" : ""}>
+      ${g.draw_offer === "you" ? T.drawSent : T.offerDraw}</button>`}<button class="btn small" id="b-resign">${T.resign}</button></div>` : "")
+    + (bot && g.status === "over" ? `<div class="muted" style="text-align:center;margin-top:6px">${T.botNote}</div>` : "");
+  if ($("b-resign")) $("b-resign").onclick = () => {
+    const go = ok => ok && act({ action: "resign" });
+    if (tg && tg.showConfirm) tg.showConfirm(T.sureResign, go); else go(confirm(T.sureResign));
+  };
+  if ($("b-draw")) $("b-draw").onclick = () => act({ action: "offer" });
+  if ($("b-acc")) $("b-acc").onclick = () => act({ action: "accept" });
+  if ($("b-dec")) $("b-dec").onclick = () => act({ action: "decline" });
+}
+
+async function act(body) {
+  try { state.game = await api("/api/act", { id: state.game.id, ...body }); } catch (e) { showErr(e.message); }
+  update();
+}
+async function makeMove(uci) {
+  const g = state.game;
+  state.sel = null; state.promo = null; document.getElementById("promo").classList.remove("on");
+  drawPieces(applyMove(shown, uci), uci.slice(0, 2));  // сразу на доске
+  state.pending = uci; haptic("light"); update();
+  try {
+    const before = shown;
+    state.game = await api("/api/act", { id: g.id, action: "move", uci });
+    state.pending = null;
+    // ответ бота пришёл вместе с нашим ходом — даём своему ходу доехать, потом едет бот
+    if (state.game.kind === "bot" && state.game.last && state.game.last !== uci) await new Promise(r => setTimeout(r, 250));
+    if (shown === before) update(state.game.last ? state.game.last.slice(0, 2) : undefined);
+  } catch (e) {
+    state.pending = null; showErr(e.message);
+    try { state.game = await api("/api/game?id=" + encodeURIComponent(g.id)); } catch (e2) {}
+    update();
+  }
+}
+function tryMove(from, to) {
+  const opts = state.game.legal.filter(m => m.startsWith(from + to));
+  if (!opts.length) return false;
+  if (opts.length > 1) {  // превращение пешки — выбор фигуры
+    state.promo = from + to; state.sel = from; update();
+    document.getElementById("promo").classList.add("on");
+    return true;
+  }
+  makeMove(opts[0]);
+  return true;
+}
+const canMove = () => state.game && state.game.your_turn && !state.pending;
+function onTap(sq) {
+  if (!canMove()) return;
+  if (state.sel && state.sel !== sq && tryMove(state.sel, sq)) return;
+  const mine = state.game.legal.some(m => m.startsWith(sq));
+  state.sel = mine && state.sel !== sq ? sq : null;
+  if (state.sel) haptic("sel");
+  update();
+}
+function bindBoard() {
+  const board = document.getElementById("board");
+  board.addEventListener("pointerdown", e => {
+    const sq = sqAt(board, e.clientX, e.clientY);
+    if (!sq) return;
+    if (canMove() && pieceEls[sq] && state.game.legal.some(m => m.startsWith(sq))) {
+      drag = { from: sq, el: pieceEls[sq], x: e.clientX, y: e.clientY, moved: false, wasSel: state.sel === sq };
+      board.setPointerCapture(e.pointerId);
+      if (state.sel !== sq) { state.sel = sq; haptic("sel"); update(); }
+    } else onTap(sq);
+  });
+  board.addEventListener("pointermove", e => {
+    if (!drag) return;
+    if (!drag.moved && Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < 6) return;
+    drag.moved = true;
+    const rc = board.getBoundingClientRect(), s = rc.width / 8;
+    drag.el.classList.add("drag");
+    drag.el.style.transform = `translate(${e.clientX - rc.left - s / 2}px, ${e.clientY - rc.top - s / 2}px) scale(1.18)`;
+  });
+  const end = e => {
+    if (!drag) return;
+    const d = drag; drag = null;
+    d.el.classList.remove("drag");
+    if (!d.moved) {  // просто касание: выбрали фигуру; повторное касание той же — снять выбор
+      if (d.wasSel) { state.sel = null; update(); }
+      return;
+    }
+    const to = sqAt(board, e.clientX, e.clientY);
+    place(d.el, d.from);   // вернуть на место (если ход есть — тут же уедет на новую клетку)
+    if (to && to !== d.from && tryMove(d.from, to)) return;
+  };
+  board.addEventListener("pointerup", end);
+  board.addEventListener("pointercancel", end);
+  new ResizeObserver(() => board.style.setProperty("--sq", board.clientWidth / 8 + "px")).observe(board);
+  document.querySelectorAll("#promo button").forEach(b => b.onclick = () => makeMove(state.promo + b.dataset.p));
+}
+
+function render() {
+  const app = document.getElementById("app");
+  if (!(tg && tg.initData)) { app.innerHTML = `<h1>${T.title}</h1><div class="card muted">${T.noTg}</div>`; return; }
+  if (state.view === "game" && state.game) {
+    const g = state.game;
+    if (g.status === "wait") {
+      app.innerHTML = waitHTML(g);
+      if (document.getElementById("b-share")) document.getElementById("b-share").onclick = () => share(g.id);
+      if (document.getElementById("b-cancel")) document.getElementById("b-cancel").onclick = async () => {
+        try { await api("/api/act", { id: g.id, action: "cancel" }); } catch (e) {
+          if (e.status === 400) { showErr(e.message); poll(0); return; }  // партия уже началась — показываем её
+        }
+        state.view = "lobby"; state.game = null; state.lobbyAt = 0; render(); tick();
+      };
+    } else if (!document.getElementById("board") || app.dataset.game !== g.id) {
+      app.innerHTML = skeleton(g); app.dataset.game = g.id;
+      bindBoard(); update();
+    } else update();
+    document.getElementById("b-back").onclick = () => {
+      state.view = "lobby"; state.game = null; state.sel = null; state.lobbyAt = 0; app.dataset.game = ""; render(); tick();
+    };
+    return;
+  }
+  app.dataset.game = "";
+  app.innerHTML = lobbyHTML();
+  document.getElementById("b-search").onclick = () => start("search");
+  document.getElementById("b-invite").onclick = () => start("invite");
+  document.getElementById("b-notify").onclick = async () => {
+    const want = !state.notify;
+    state.notify = want; render(); haptic("sel");  // переключаем сразу, сервер — следом
+    try { state.notify = !!(await api("/api/notify", { on: want })).notify; } catch (e) { state.notify = !want; showErr(e.message); }
+    render();
+  };
+  document.getElementById("b-bot").onclick = () => { state.pickLevel = !state.pickLevel; render(); };
+  document.querySelectorAll("[data-level]").forEach(b => b.onclick = () => { state.pickLevel = false; start("bot", +b.dataset.level); });
+  document.querySelectorAll("[data-g]").forEach(el => el.onclick = () => openGame(el.dataset.g));
+}
+async function start(kind, level) {
+  try {
+    state.game = await api("/api/new", { kind, level }); state.view = "game"; state.sel = null; render();
+    if (kind === "invite") share(state.game.id);
+    haptic("light"); poll(2000);
+  } catch (e) { showErr(e.message); }
+}
+async function openGame(id, join) {
+  try {
+    state.game = join ? await api("/api/act", { id, action: "join" }) : await api("/api/game?id=" + encodeURIComponent(id));
+    state.view = "game"; state.sel = null; render(); poll(2000);
+  } catch (e) { showErr(e.message); state.view = "lobby"; render(); tick(); }
+}
+
+document.addEventListener("visibilitychange", () => { if (!document.hidden) poll(0); });
+render();
+if (tg && tg.initData) {
+  if (params.get("g")) openGame(params.get("g"), true);  // пришли по ссылке-приглашению
+  else tick();
+}
+</script>
+</body>
+</html>
