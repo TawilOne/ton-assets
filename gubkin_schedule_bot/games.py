@@ -117,19 +117,24 @@ class Store:
                 reason TEXT DEFAULT '', draw_offer INTEGER DEFAULT 0, created REAL, updated REAL);
             CREATE INDEX IF NOT EXISTS games_status ON games(status, kind);
         """)
-        try:  # уровень бота (для партий с ботом); у старой базы колонки ещё нет
-            self.db.execute("ALTER TABLE games ADD COLUMN level INTEGER DEFAULT 0")
-        except sqlite3.OperationalError:
-            pass
+        for table, column in (("games", "level INTEGER DEFAULT 0"),  # уровень бота
+                              ("players", "photo TEXT DEFAULT ''")):  # аватарка из Telegram (photo_url)
+            try:  # у старой базы колонки ещё нет
+                self.db.execute(f"ALTER TABLE {table} ADD COLUMN {column}")
+            except sqlite3.OperationalError:
+                pass
         self.db.commit()
 
     # ---- игроки
 
     def touch(self, user: dict) -> None:
         uid, now = user["id"], time.time()
-        self.db.execute("INSERT INTO players (id, name, rating, seen) VALUES (?, ?, ?, ?) "
-                        "ON CONFLICT(id) DO UPDATE SET name = excluded.name, seen = excluded.seen",
-                        (uid, short_name(user), START_RATING, now))
+        photo = str(user.get("photo_url") or "")
+        if not photo.startswith("https://"):  # только картинки Telegram по https — ничего другого в <img> не пускаем
+            photo = ""
+        self.db.execute("INSERT INTO players (id, name, rating, seen, photo) VALUES (?, ?, ?, ?, ?) "
+                        "ON CONFLICT(id) DO UPDATE SET name = excluded.name, seen = excluded.seen, photo = excluded.photo",
+                        (uid, short_name(user), START_RATING, now, photo[:300]))
         self.db.commit()
 
     def player(self, uid: int | None) -> dict | None:
@@ -139,7 +144,7 @@ class Store:
         if not r:
             return None
         return {"id": r["id"], "name": r["name"], "rating": r["rating"], "wins": r["wins"],
-                "losses": r["losses"], "draws": r["draws"], "faculty": faculty_of(r["id"])}
+                "losses": r["losses"], "draws": r["draws"], "faculty": faculty_of(r["id"]), "photo": r["photo"] or ""}
 
     def top(self, limit: int = 50) -> list[dict]:
         rows = self.db.execute("SELECT id FROM players WHERE wins + losses + draws > 0 "

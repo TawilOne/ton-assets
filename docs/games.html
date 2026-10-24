@@ -60,6 +60,13 @@
   .player .av { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; font-weight: 800;
                 background: var(--surface-2); border: 1px solid var(--line); }
   .player .av.w { background: #f5f5f7; color: #000; } .player .av.b { background: #0a0a0c; color: #fff; }
+  .av { position: relative; overflow: hidden; }
+  .av img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
+  /* цвет фигур игрока — тонкой рамкой вокруг аватарки */
+  .player .av.w:has(img) { box-shadow: 0 0 0 2px #f5f5f7; } .player .av.b:has(img) { box-shadow: 0 0 0 2px #55555f; }
+  .player.turn .av.w:has(img), .player.turn .av.b:has(img) { box-shadow: 0 0 0 3px var(--red); }
+  .list .av { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; flex: none;
+              font-weight: 800; font-size: 13px; background: var(--surface-2); border: 1px solid var(--line); }
   .player .who { flex: 1; min-width: 0; } .player .who b { display: block; }
   .player .who small { color: var(--muted); font-size: 12px; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .player .rt { color: var(--muted); font-variant-numeric: tabular-nums; font-weight: 700; }
@@ -245,7 +252,7 @@ function lobbyHTML() {
       <span>${esc(what)}</span></div><div class="num">›</div></div>`;
   }).join("");
   const top = state.top.map((p, i) => `<div class="item${state.me && p.id === state.me.id ? " me" : ""}">
-      <div class="place">${i < 3 ? ["🥇", "🥈", "🥉"][i] : i + 1}</div><div class="who">${playerLine(p)}</div>
+      <div class="place">${i < 3 ? ["🥇", "🥈", "🥉"][i] : i + 1}</div><div class="av">${avatar(p)}</div><div class="who">${playerLine(p)}</div>
       <div class="num"><b>${p.rating}</b><small>${p.wins}–${p.losses}–${p.draws}</small></div></div>`).join("");
   return `<h1>${T.title}</h1>
     <div class="card"><div class="hero"><div class="ico">♟️</div><div><b>${T.chess}</b><span class="muted">${T.chessSub}</span></div></div>
@@ -354,10 +361,15 @@ function takenHTML(color) {
   return `<div class="taken">${list.map(t => `<span class="${pc(t) === t ? "b" : "w"}">${GLYPH[t]}︎</span>`).join("")}` +
     (adv > 0 ? `<b>+${adv}</b>` : "") + `</div>`;
 }
+// аватарка из Telegram; не загрузилась (нет фото, закрыто настройками, нет сети) — остаётся первая буква имени
+function avatar(p) {
+  const letter = esc((p.name || "?")[0]);
+  return p.photo ? `${letter}<img src="${esc(p.photo)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">` : letter;
+}
 function playerBar(p, color, turn) {
   if (!p) return `<div class="player"><div class="av">?</div><div class="who"><b>…</b></div></div>`;
   const name = p.bot ? `<b>${esc(p.name)}</b>` : `<b>${esc(p.name)}</b><small>${esc(p.faculty || T.noFac)}</small>`;
-  return `<div class="player${turn ? " turn" : ""}"><div class="av ${color === "white" ? "w" : "b"}">${p.bot ? "🤖" : esc((p.name || "?")[0])}</div>
+  return `<div class="player${turn ? " turn" : ""}"><div class="av ${color === "white" ? "w" : "b"}">${p.bot ? "🤖" : avatar(p)}</div>
     <div class="who">${name}${takenHTML(color)}</div>${p.bot ? "" : `<div class="rt">${p.rating}</div>`}</div>`;
 }
 function inviteLink(id) { return BOT ? `https://t.me/${BOT}?start=chess_${id}` : ""; }

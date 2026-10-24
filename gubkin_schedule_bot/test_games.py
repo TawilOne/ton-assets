@@ -200,3 +200,13 @@ def test_http_bot_game(store, monkeypatch):
         finally:
             await client.close()
     asyncio.run(go())
+
+
+def test_avatar_from_telegram(store):
+    """Аватарка — из подписанных данных Telegram (photo_url); не https — не сохраняем."""
+    store.touch({"id": 1, "first_name": "Иван", "photo_url": "https://t.me/i/userpic/320/abc.jpg"})
+    assert store.player(1)["photo"] == "https://t.me/i/userpic/320/abc.jpg"
+    store.touch({"id": 2, "first_name": "Мария", "photo_url": "javascript:alert(1)"})
+    assert store.player(2)["photo"] == ""
+    store.touch({"id": 1, "first_name": "Иван"})  # убрал фото в Telegram — пропадёт и у нас
+    assert store.player(1)["photo"] == ""
