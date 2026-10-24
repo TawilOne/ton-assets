@@ -62,6 +62,7 @@ TEXT = {
               "/week — текущая неделя\n"
               "/group — выбрать группу\n"
               "/subscribe — присылать расписание в выбранное время\n"
+              "/games — мини-игры (шахматы)\n"
               "/settings — язык",
         "en": "📅 Gubkin University timetable\n{group_line}\n\n"
               "/today — today's classes\n"
@@ -69,6 +70,7 @@ TEXT = {
               "/week — this week\n"
               "/group — choose your group\n"
               "/subscribe — get the timetable at a time you choose\n"
+              "/games — mini games (chess)\n"
               "/settings — language",
         "fr": "📅 Emploi du temps de l'Université Gubkin\n{group_line}\n\n"
               "/today — les cours d'aujourd'hui\n"
@@ -76,6 +78,7 @@ TEXT = {
               "/week — cette semaine\n"
               "/group — choisir votre groupe\n"
               "/subscribe — recevoir l'emploi du temps à l'heure choisie\n"
+              "/games — mini-jeux (échecs)\n"
               "/settings — langue",
     },
     # ---- выбор группы

@@ -502,6 +502,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_message.reply_text(
         help_text(lang, grp) + "\n\n" + i18n.t("beta", lang) + "\n\n" + i18n.t("feedback", lang),
         reply_markup=keyboard(lang), disable_web_page_preview=True)
+    await cmd_games(update, ctx)  # кнопка мини-игр: к приветствию её не прикрепить — там уже нижняя панель
     if not grp:  # новый пользователь — сразу предлагаем выбрать группу
         await _ask_group(update)
 

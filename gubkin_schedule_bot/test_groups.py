@@ -197,8 +197,11 @@ def test_new_user_picks_group_and_gets_schedule(env):
     u = update(uid=5)
     run(bot.cmd_start(u, ctx()))
     assert "Группа не выбрана" in u.effective_message.sent[0][0]
-    fac_buttons = buttons(u.effective_message.sent[1][1]["reply_markup"])
-    assert "Выберите факультет" in u.effective_message.sent[1][0]
+    assert "/games — мини-игры" in u.effective_message.sent[0][0]
+    games_msg, games_kw = u.effective_message.sent[1]  # следом — кнопка мини-игр
+    assert "шахматы" in games_msg and "games.html" in games_kw["reply_markup"].inline_keyboard[0][0].web_app.url
+    fac_buttons = buttons(u.effective_message.sent[2][1]["reply_markup"])
+    assert "Выберите факультет" in u.effective_message.sent[2][0]
     cb = next(c for t, c in fac_buttons if "Геологии" in t)
 
     u = update(uid=5, data=cb)
