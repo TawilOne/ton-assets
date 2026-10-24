@@ -297,3 +297,21 @@ def test_cancel_right_after_opponent_joined(store, monkeypatch):
     with pytest.raises(games.GameError):
         store.cancel(1, gid)
     assert store.view(1, gid)["status"] == "play"
+
+
+def test_starting_another_game_drops_your_search(store):
+    """Нажал «Найти соперника», вернулся и сел играть с ботом — поиск снимается, к нему никто не подсядет."""
+    store.create(1, "search")
+    assert store.searching(2) == 1
+    store.create(1, "bot", 1)
+    assert store.searching(2) == 0
+    mine = store.create(2, "search")
+    assert store.view(2, mine)["status"] == "wait"  # Марию ни к кому не посадили
+    store.cancel(2, mine)
+
+    store.create(1, "search")  # то же с приглашением друга и с переходом по чужой ссылке
+    store.create(1, "invite")
+    assert store.searching(3) == 0
+    store.create(1, "search")
+    store.join(1, store.create(3, "invite"))
+    assert store.searching(2) == 0

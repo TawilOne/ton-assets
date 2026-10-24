@@ -200,6 +200,8 @@ class Store:
     def create(self, uid: int, kind: str, level: int = 0) -> str:
         """kind: "invite" — партия по ссылке для друга; "search" — открытый поиск соперника;
         "bot" — с ботом уровня level (цвет — случайно; партия сразу начинается)."""
+        if kind != "search":
+            self._drop_search(uid)
         if kind == "bot":
             if level not in BOT_LEVELS:
                 raise GameError("Непонятный уровень бота")
@@ -241,6 +243,7 @@ class Store:
             raise GameError("В эту партию уже играют")
         if g["creator"] == uid:
             return gid  # своё приглашение — ждём друга
+        self._drop_search(uid)
         white, black = (uid, g["creator"]) if random.random() < 0.5 else (g["creator"], uid)
         now = time.time()
         # автор приглашения мог давно закрыть приложение: пока он не откроет партию, уход ему не считаем (0)
@@ -250,6 +253,12 @@ class Store:
                         "WHERE id = ?", (white, black, now, seen[white], seen[black], gid))
         self.db.commit()
         return gid
+
+    def _drop_search(self, uid: int) -> None:
+        """Начал другую партию — его открытый поиск снимаем: иначе к нему подсядут, пока он играет
+        в другой, и через 3 минуты засчитают уход. Внутри join поиск подсевшего тоже снимается."""
+        self.db.execute("DELETE FROM games WHERE status = 'wait' AND kind = 'search' AND creator = ?", (uid,))
+        self.db.commit()
 
     def cancel(self, uid: int, gid: str) -> None:
         g = self._get(gid)
