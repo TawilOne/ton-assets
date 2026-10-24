@@ -113,36 +113,7 @@ def _fetch(start: dt.date, end: dt.date, grp: dict):
 
 # ---- факультеты, группы и выбор группы
 
-# Факультеты в боте: hint — слова из названия факультета на сайте (должны быть ВСЕ — так «химическ»
-# не спутается с «нефтехимической»), по ним ноутбук находит факультет; дальше — названия кнопок.
-# Чтобы добавить факультет — допишите строку; ноутбук сам скачает его группы при следующем sync.
-FACULTIES = [
-    {"key": "geo", "hint": ["геолог"],
-     "ru": "⛏ Геологии и геофизики", "en": "⛏ Geology & Geophysics", "fr": "⛏ Géologie et géophysique"},
-    {"key": "aivt", "hint": ["автоматик", "вычислительн"],
-     "ru": "💻 Автоматики и ВТ", "en": "💻 Automation & Computing", "fr": "💻 Automatique et informatique"},
-    {"key": "chem", "hint": ["химическ", "технолог", "эколог"],
-     "ru": "🧪 Химической технологии и экологии", "en": "🧪 Chemical Technology & Ecology",
-     "fr": "🧪 Génie chimique et écologie"},
-    {"key": "econ", "hint": ["экономик", "управлен"],
-     "ru": "📈 Экономики и управления", "en": "📈 Economics & Management", "fr": "📈 Économie et gestion"},
-    {"key": "oil", "hint": ["разработк", "месторожден"],
-     "ru": "🛢 Разработки нефтяных и газовых месторождений", "en": "🛢 Oil & Gas Field Development",
-     "fr": "🛢 Exploitation des gisements de pétrole et de gaz"},
-    {"key": "pipe", "hint": ["трубопровод"],
-     "ru": "🔧 Трубопроводного транспорта", "en": "🔧 Pipeline Transport", "fr": "🔧 Transport par pipelines"},
-    {"key": "mech", "hint": ["инженерн", "механик"],
-     "ru": "⚙️ Инженерной механики", "en": "⚙️ Engineering Mechanics", "fr": "⚙️ Mécanique de l'ingénieur"},
-    {"key": "safety", "hint": ["комплексн", "безопасност"],
-     "ru": "🦺 Комплексной безопасности ТЭК", "en": "🦺 Integrated Energy Sector Safety",
-     "fr": "🦺 Sécurité intégrée du secteur énergétique"},
-    {"key": "intl", "hint": ["международн", "бизнес"],
-     "ru": "🌍 Международного энергетического бизнеса", "en": "🌍 International Energy Business",
-     "fr": "🌍 Commerce international de l'énergie"},
-    {"key": "hum", "hint": ["гуманитарн"],
-     "ru": "📚 Гуманитарного образования", "en": "📚 Humanities", "fr": "📚 Sciences humaines"},
-]
-DEFAULT_FACULTY = "geo"  # факультет группы по умолчанию (GROUP_CODE)
+from faculties import DEFAULT_FACULTY, FACULTIES  # noqa: E402 — общий список с мини-играми (games.py)
 
 _groups_cache: dict = {"mtime": None, "list": []}
 _ug_lock = threading.Lock()
@@ -492,7 +463,32 @@ def help_text(lang: str, grp: dict | None = None) -> str:
     return i18n.t("help", lang, group_line=_group_line(grp, lang))
 
 
+def _bot_username(ctx) -> str:
+    """Имя бота (для ссылок-приглашений в мини-играх); пусто, если бот ещё не знает себя."""
+    try:
+        return ctx.bot.username or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _webapp_base() -> str:
+    return os.environ.get("WEBAPP_URL") or _read_setting("webapp.txt") or DEFAULT_WEBAPP_URL
+
+
+async def _open_game(update: Update, ctx: ContextTypes.DEFAULT_TYPE, gid: str) -> None:
+    """Ссылка-приглашение t.me/бот?start=chess_<id>: кнопка, открывающая партию в мини-приложении."""
+    lang = _lang(update)
+    url = _webapp_base() + "games.html?" + urlencode({"g": gid, "lg": lang, "bot": _bot_username(ctx)})
+    await update.effective_message.reply_text(
+        i18n.t("chess_invite", lang),
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(i18n.t("chess_open", lang), web_app=WebAppInfo(url))]]))
+
+
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    arg = (ctx.args or [""])[0] if getattr(ctx, "args", None) else ""
+    if re.fullmatch(r"chess_[A-Za-z0-9]{4,16}", arg):
+        await _open_game(update, ctx, arg[6:])
+        return
     lang, grp = _lang(update), _user_group(update)
     await update.effective_message.reply_text(
         help_text(lang, grp) + "\n\n" + i18n.t("beta", lang) + "\n\n" + i18n.t("feedback", lang),
@@ -681,7 +677,7 @@ async def cmd_map(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                for l in lessons]
     url = (os.environ.get("WEBAPP_URL") or _read_setting("webapp.txt") or DEFAULT_WEBAPP_URL) + "?" + urlencode(
         {"d": title, "dt": day.isoformat(), "l": json.dumps(payload, ensure_ascii=False, separators=(",", ":")), "lg": lang,
-         "v": int(time.time() // 300)})  # новый адрес раз в 5 минут — Telegram не держит старую версию страницы
+         "bot": _bot_username(ctx), "v": int(time.time() // 300)})  # новый адрес раз в 5 минут — Telegram не держит старую версию страницы
     button = InlineKeyboardMarkup([[InlineKeyboardButton(i18n.t("open_map", lang), web_app=WebAppInfo(url))]])
     note = "\n\n" + i18n.t("map_note", lang)
     grp = _user_group(update)

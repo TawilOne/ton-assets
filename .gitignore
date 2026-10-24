@@ -22,3 +22,4 @@ gubkin_schedule_bot/changes_seen.json
 gubkin_schedule_bot/sync_failed.json
 gubkin_schedule_bot/*.tmp
 gubkin_schedule_bot/sync.lock
+gubkin_schedule_bot/games.db

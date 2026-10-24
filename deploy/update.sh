@@ -17,6 +17,12 @@ if [ -s /etc/gubkin-bot/vpnkey ] && [ ! -e "$D/direct.conf" ] && [ ! -e "$D/rela
   bash "$DIR/deploy/reproxy.sh"   # заново проверить серверы подписки
 fi
 systemctl restart gubkin-bot
+# сервер мини-игр — если включён (deploy/games.sh)
+if systemctl is-enabled -q gubkin-games 2>/dev/null; then
+  install -m 644 "$DIR/deploy/gubkin-games.service" /etc/systemd/system/
+  systemctl daemon-reload
+  systemctl restart gubkin-games
+fi
 echo "Обновлено до: $(git -C "$DIR" log -1 --format='%h %s')"
 exit
 }

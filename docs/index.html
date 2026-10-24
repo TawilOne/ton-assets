@@ -35,6 +35,12 @@
       var(--bg);
     background-attachment: fixed;
   }
+  /* вкладки «Где пара / Игры» */
+  .tabs { display: flex; gap: 4px; padding: 4px; margin: 0 0 14px; border-radius: 14px; background: var(--surface-2);
+          border: 1px solid var(--line); }
+  .tabs a { flex: 1; text-align: center; padding: 8px 6px; border-radius: 10px; color: var(--muted);
+            text-decoration: none; font-weight: 700; font-size: 14px; }
+  .tabs a.on { background: #fff; color: #000; }
   /* большая кнопка «Карта вуза» — открывает campus.html */
   .campus-btn { display: flex; align-items: center; gap: 14px; margin: 14px 0 0; padding: 16px 18px; border-radius: var(--radius);
                 text-decoration: none; color: var(--text); border: 1px solid rgba(255,0,0,.35);
@@ -191,6 +197,8 @@
 </style>
 </head>
 <body>
+<div class="tabs"><a class="on" href="#">📍 <span id="t-where">Где пара</span></a>
+  <a id="tab-games" href="games.html">🎮 <span id="t-games">Игры</span></a></div>
 <div class="top">
   <div>
     <div class="eyebrow" id="date"></div>
@@ -439,6 +447,16 @@ function planHTML(loc) {
   return "";
 }
 
+// вкладка «Игры»: язык и имя бота (для ссылок-приглашений); адрес с парами — чтобы вернуться на вкладку «Где пара»
+{
+  const q = new URLSearchParams();
+  if (LANG !== "ru") q.set("lg", LANG);
+  if (params.get("bot")) q.set("bot", params.get("bot"));
+  document.getElementById("tab-games").href = "games.html" + (q.toString() ? "?" + q : "");
+  document.getElementById("t-where").textContent = L3("Где пара", "My class", "Mon cours");
+  document.getElementById("t-games").textContent = L3("Игры", "Games", "Jeux");
+  try { sessionStorage.setItem("where", (location.pathname.split("/").pop() || "index.html") + location.search); } catch (e) {}
+}
 // кнопка «Карта вуза»: язык и корпус текущей пары — он подсветится на карте
 const CAMPUS_B = { main: "main", k2: "k2", lib: "lib" };
 document.getElementById("campus-t").textContent = L3("Карта вуза", "Campus map", "Plan du campus");

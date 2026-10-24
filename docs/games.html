@@ -1,0 +1,379 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Мини-игры</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: #000; --surface: #0f0f11; --surface-2: #17171a; --line: rgba(255,255,255,.08);
+    --text: #f5f5f7; --muted: #8a8a93; --red: #ff0000; --blue: #3d8bff; --green: #34c759; --radius: 22px;
+    --sq-light: #3b3b47; --sq-dark: #23232b;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { background: var(--bg); touch-action: pan-x pan-y; }
+  body {
+    margin: 0; color: var(--text); font: 15px/1.45 Inter, -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+    padding: max(16px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom)); min-height: 100vh;
+    background: radial-gradient(600px 300px at 85% -60px, rgba(255,0,0,.16), transparent 70%),
+                radial-gradient(500px 260px at -10% 0, rgba(61,139,255,.10), transparent 70%), var(--bg);
+    background-attachment: fixed;
+  }
+  /* вкладки «Где пара / Игры» — как в index.html */
+  .tabs { display: flex; gap: 4px; padding: 4px; margin: 0 0 14px; border-radius: 14px; background: var(--surface-2);
+          border: 1px solid var(--line); }
+  .tabs a { flex: 1; text-align: center; padding: 8px 6px; border-radius: 10px; color: var(--muted);
+            text-decoration: none; font-weight: 700; font-size: 14px; }
+  .tabs a.on { background: #fff; color: #000; }
+  h1 { margin: 2px 2px 14px; font-size: 30px; font-weight: 800; letter-spacing: -.03em; }
+  .card { background: linear-gradient(180deg, rgba(255,255,255,.045), rgba(255,255,255,.015));
+          border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; margin-bottom: 12px; }
+  .card h2 { margin: 0 0 12px; font-size: 17px; font-weight: 700; display: flex; justify-content: space-between; }
+  .card h2 span { color: var(--muted); font-size: 13px; font-weight: 500; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .btn { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; padding: 14px;
+         border-radius: 16px; border: 1px solid var(--line); background: var(--surface-2); color: var(--text);
+         font: 700 16px Inter, system-ui, sans-serif; margin-top: 10px; cursor: pointer; }
+  .btn.red { background: var(--red); border-color: var(--red); }
+  .btn.small { padding: 10px; font-size: 14px; border-radius: 13px; }
+  .btn:active { transform: scale(.98); }
+  .row { display: flex; gap: 8px; } .row .btn { flex: 1; }
+  .hero { display: flex; align-items: center; gap: 14px; }
+  .hero .ico { font-size: 40px; line-height: 1; }
+  .hero b { font-size: 20px; display: block; }
+  .stat { display: flex; gap: 8px; margin-top: 12px; }
+  .stat div { flex: 1; text-align: center; padding: 10px 4px; border-radius: 14px; background: var(--surface-2); }
+  .stat b { display: block; font-size: 18px; } .stat small { color: var(--muted); font-size: 12px; }
+  .list .item { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line); }
+  .list .item:first-child { border-top: 0; }
+  .list .place { width: 26px; text-align: center; font-weight: 800; color: var(--muted); }
+  .list .who { flex: 1; min-width: 0; } .list .who b { display: block; }
+  .list .who small, .list .who span { color: var(--muted); font-size: 12px; display: block;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .list .num { text-align: right; font-variant-numeric: tabular-nums; } .list .num b { display: block; }
+  .list .num small { color: var(--muted); font-size: 12px; }
+  .list .item.me { background: rgba(255,0,0,.10); border-radius: 12px; padding: 10px 8px; margin: 0 -8px; }
+  .list .item.tap { cursor: pointer; }
+  /* партия */
+  .player { display: flex; align-items: center; gap: 10px; padding: 10px 2px; }
+  .player .av { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; font-weight: 800;
+                background: var(--surface-2); border: 1px solid var(--line); }
+  .player .av.w { background: #f5f5f7; color: #000; } .player .av.b { background: #0a0a0c; color: #fff; }
+  .player .who { flex: 1; min-width: 0; } .player .who b { display: block; }
+  .player .who small { color: var(--muted); font-size: 12px; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .player .rt { color: var(--muted); font-variant-numeric: tabular-nums; font-weight: 700; }
+  .player.turn .av { box-shadow: 0 0 0 3px var(--red); }
+  .board { display: grid; grid-template-columns: repeat(8, 1fr); width: 100%; max-width: 440px; margin: 0 auto;
+           aspect-ratio: 1; border-radius: 12px; overflow: hidden; border: 1px solid var(--line); user-select: none; }
+  .sq { position: relative; display: grid; place-items: center; font-size: min(9vw, 40px); line-height: 1; cursor: pointer; }
+  .sq.l { background: var(--sq-light); } .sq.d { background: var(--sq-dark); }
+  .sq.last { box-shadow: inset 0 0 0 100px rgba(61,139,255,.22); }
+  .sq.sel { box-shadow: inset 0 0 0 100px rgba(255,0,0,.35); }
+  .sq.check { box-shadow: inset 0 0 0 100px rgba(255,0,0,.55); }
+  .sq .p { font-family: "Segoe UI Symbol", "Apple Symbols", "DejaVu Sans", sans-serif; }
+  .sq .p.w { color: #f7f7fa; text-shadow: 0 0 1px #000, 0 1px 2px rgba(0,0,0,.8); }
+  .sq .p.b { color: #050507; text-shadow: 0 0 1px #9a9aa6, 0 0 2px rgba(255,255,255,.35); }
+  .sq .dot { position: absolute; width: 28%; height: 28%; border-radius: 50%; background: rgba(255,0,0,.55); }
+  .sq .ring { position: absolute; inset: 6%; border-radius: 50%; border: 3px solid rgba(255,0,0,.6); }
+  .sq .cf, .sq .cr { position: absolute; font-size: 9px; color: rgba(255,255,255,.35); font-weight: 700; }
+  .sq .cf { right: 3px; bottom: 1px; } .sq .cr { left: 3px; top: 1px; }
+  .status { text-align: center; font-weight: 700; margin: 12px 0 2px; min-height: 22px; }
+  .status.win { color: var(--green); } .status.lose { color: #ff6060; }
+  .promo { display: none; gap: 8px; justify-content: center; margin-top: 10px; }
+  .promo.on { display: flex; }
+  .promo button { font-size: 32px; width: 56px; height: 56px; border-radius: 14px; border: 1px solid var(--line);
+                  background: var(--surface-2); color: var(--text); }
+  .err { position: fixed; left: 16px; right: 16px; bottom: max(16px, env(safe-area-inset-bottom)); padding: 12px 14px;
+         border-radius: 14px; background: #3a1214; border: 1px solid rgba(255,0,0,.4); display: none; z-index: 9; }
+  .err.on { display: block; }
+  .wait { text-align: center; padding: 10px 0; }
+  .wait .big { font-size: 44px; animation: bob 1.4s ease-in-out infinite; }
+  @keyframes bob { 50% { transform: translateY(-6px); } }
+</style>
+</head>
+<body>
+<div class="tabs"><a id="tab-where" href="index.html">📍 <span id="t-where">Где пара</span></a>
+  <a class="on" href="#">🎮 <span id="t-games">Игры</span></a></div>
+<div id="app"></div>
+<div class="err" id="err"></div>
+
+<script>
+const tg = window.Telegram && window.Telegram.WebApp;
+if (tg) {
+  tg.ready(); tg.expand();
+  try { tg.setHeaderColor("#000000"); tg.setBackgroundColor("#000000"); tg.BackButton && tg.BackButton.hide(); } catch (e) {}
+}
+const params = new URLSearchParams(location.search);
+const LANG = ["en", "fr"].includes(params.get("lg")) ? params.get("lg") : "ru";
+const L3 = (ru, en, fr) => (LANG === "en" ? en : LANG === "fr" ? fr : ru);
+const API = (params.get("api") || "https://153-76-167-68.sslip.io").replace(/\/$/, "");
+// имя бота — для ссылки-приглашения; бот передаёт его в адресе, запоминаем на случай перехода по вкладкам
+let BOT = params.get("bot") || "";
+try { if (BOT) sessionStorage.setItem("bot", BOT); else BOT = sessionStorage.getItem("bot") || ""; } catch (e) {}
+// вкладка «Где пара» — назад к расписанию, с которого пришли (там в адресе пары)
+try { const back = sessionStorage.getItem("where"); if (back) document.getElementById("tab-where").href = back; } catch (e) {}
+document.getElementById("t-where").textContent = L3("Где пара", "My class", "Mon cours");
+document.getElementById("t-games").textContent = L3("Игры", "Games", "Jeux");
+
+const T = {
+  title: L3("Мини-игры", "Mini games", "Mini-jeux"),
+  chess: L3("Шахматы", "Chess", "Échecs"),
+  chessSub: L3("Сыграйте со студентами вуза", "Play with students of the university", "Jouez avec les étudiants"),
+  search: L3("🔍 Найти соперника", "🔍 Find an opponent", "🔍 Trouver un adversaire"),
+  invite: L3("🤝 Пригласить друга", "🤝 Invite a friend", "🤝 Inviter un ami"),
+  rating: L3("Рейтинг", "Rating", "Classement"), wins: L3("побед", "wins", "victoires"),
+  losses: L3("поражений", "losses", "défaites"), draws: L3("ничьих", "draws", "nuls"),
+  my: L3("Мои партии", "My games", "Mes parties"), top: L3("Рейтинг вуза", "University ranking", "Classement de l'université"),
+  topEmpty: L3("Пока никто не доиграл ни одной партии — будьте первым!", "No finished games yet — be the first!",
+               "Aucune partie terminée — soyez le premier !"),
+  noFac: L3("факультет не выбран", "faculty not chosen", "faculté non choisie"),
+  searching: L3("Ищем соперника…", "Looking for an opponent…", "Recherche d'un adversaire…"),
+  searchingSub: L3("Как только кто-то тоже нажмёт «Найти соперника», партия начнётся", "The game starts as soon as someone else searches too",
+                   "La partie commence dès qu'un autre joueur cherche aussi"),
+  waitFriend: L3("Ждём друга", "Waiting for your friend", "En attente de votre ami"),
+  waitFriendSub: L3("Отправьте другу ссылку — партия начнётся, когда он её откроет", "Send the link to your friend — the game starts when they open it",
+                    "Envoyez le lien à votre ami — la partie commence quand il l'ouvre"),
+  share: L3("📨 Отправить ссылку", "📨 Send the link", "📨 Envoyer le lien"),
+  cancel: L3("Отменить", "Cancel", "Annuler"), back: L3("‹ К играм", "‹ Games", "‹ Jeux"),
+  yourTurn: L3("Ваш ход", "Your move", "À vous de jouer"), theirTurn: L3("Ход соперника…", "Opponent's move…", "Au tour de l'adversaire…"),
+  check: L3("Шах!", "Check!", "Échec !"), resign: L3("🏳️ Сдаться", "🏳️ Resign", "🏳️ Abandonner"),
+  offerDraw: L3("🤝 Ничья?", "🤝 Offer a draw", "🤝 Proposer nul"),
+  drawSent: L3("Ничья предложена", "Draw offered", "Nul proposé"),
+  drawAsk: L3("Соперник предлагает ничью", "Your opponent offers a draw", "L'adversaire propose nul"),
+  accept: L3("Принять", "Accept", "Accepter"), decline: L3("Отказаться", "Decline", "Refuser"),
+  sureResign: L3("Точно сдаться?", "Resign for sure?", "Abandonner vraiment ?"),
+  win: L3("🏆 Победа!", "🏆 You won!", "🏆 Victoire !"), lose: L3("Поражение", "You lost", "Défaite"),
+  draw: L3("🤝 Ничья", "🤝 Draw", "🤝 Nul"),
+  reasons: { checkmate: L3("мат", "checkmate", "échec et mat"), resign: L3("сдача", "resignation", "abandon"),
+             time: L3("3 дня без хода", "no move for 3 days", "3 jours sans coup"), stalemate: L3("пат", "stalemate", "pat"),
+             agreement: L3("по согласию", "by agreement", "d'un commun accord"),
+             insufficient_material: L3("мало фигур", "insufficient material", "matériel insuffisant"),
+             threefold_repetition: L3("троекратное повторение", "threefold repetition", "triple répétition"),
+             fivefold_repetition: L3("пятикратное повторение", "fivefold repetition", "quintuple répétition"),
+             fifty_moves: L3("50 ходов", "fifty-move rule", "règle des 50 coups"),
+             seventyfive_moves: L3("75 ходов", "75-move rule", "règle des 75 coups") },
+  playing: L3("идёт партия", "in progress", "en cours"), waiting: L3("ждём соперника", "waiting", "en attente"),
+  vs: L3("против", "vs", "contre"), noTg: L3("Откройте игры из Telegram — через бота", "Open the games from Telegram, via the bot",
+                                          "Ouvrez les jeux depuis Telegram, via le bot"),
+  offline: L3("Сервер игр не отвечает. Попробуйте чуть позже", "The game server isn't responding. Try again later",
+              "Le serveur de jeux ne répond pas. Réessayez plus tard"),
+  inviteText: L3("Сыграем в шахматы? ♟", "Fancy a game of chess? ♟", "Une partie d'échecs ? ♟"),
+  noBot: L3("Скопируйте ссылку и отправьте другу:", "Copy the link and send it to your friend:", "Copiez le lien et envoyez-le à votre ami :"),
+};
+
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const haptic = k => { try { tg && tg.HapticFeedback && (k === "sel" ? tg.HapticFeedback.selectionChanged() : tg.HapticFeedback.impactOccurred(k)); } catch (e) {} };
+function showErr(text) {
+  const e = document.getElementById("err"); e.textContent = text; e.classList.add("on");
+  clearTimeout(showErr.t); showErr.t = setTimeout(() => e.classList.remove("on"), 3500);
+}
+async function api(path, body) {
+  const init = (tg && tg.initData) || "";
+  const r = await fetch(API + path, {
+    method: body ? "POST" : "GET",
+    headers: { "X-Init-Data": init, ...(body ? { "Content-Type": "application/json" } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || T.offline);
+  return data;
+}
+
+let state = { view: "lobby", game: null, me: null, games: [], top: [], sel: null, promo: null };
+let timer = null;
+function poll(ms) { clearTimeout(timer); timer = setTimeout(tick, ms); }
+async function tick() {
+  try {
+    if (state.view === "game" && state.game) {
+      const g = await api("/api/game?id=" + encodeURIComponent(state.game.id));
+      if (JSON.stringify(g) !== JSON.stringify(state.game)) {
+        if (g.your_turn && !state.game.your_turn) haptic("medium");
+        state.game = g; render();
+      }
+      poll(g.status === "over" ? 15000 : 2000);
+    } else {
+      await loadLobby(); poll(8000);
+    }
+  } catch (e) { poll(5000); }
+}
+async function loadLobby() {
+  const [me, top] = await Promise.all([api("/api/me"), api("/api/top")]);
+  state.me = me.me; state.games = me.games; state.top = top.top;
+  if (state.view === "lobby") render();
+}
+
+// ---- лобби
+function playerLine(p) {
+  return `${esc(p.name)}<small>${esc(p.faculty || T.noFac)}</small>`;
+}
+function lobbyHTML() {
+  const me = state.me || { rating: 1200, wins: 0, losses: 0, draws: 0 };
+  const games = state.games.map(g => {
+    const opp = g.you === "white" ? g.black : g.you === "black" ? g.white : null;
+    const what = g.status === "wait" ? T.waiting : (g.your_turn ? "🔴 " + T.yourTurn : T.theirTurn);
+    return `<div class="item tap" data-g="${esc(g.id)}"><div class="place">♟</div><div class="who"><b>${opp ? T.vs + " " + esc(opp.name) : T.chess}</b>
+      <span>${esc(what)}</span></div><div class="num">›</div></div>`;
+  }).join("");
+  const top = state.top.map((p, i) => `<div class="item${state.me && p.id === state.me.id ? " me" : ""}">
+      <div class="place">${i < 3 ? ["🥇", "🥈", "🥉"][i] : i + 1}</div><div class="who">${playerLine(p)}</div>
+      <div class="num"><b>${p.rating}</b><small>${p.wins}–${p.losses}–${p.draws}</small></div></div>`).join("");
+  return `<h1>${T.title}</h1>
+    <div class="card"><div class="hero"><div class="ico">♟️</div><div><b>${T.chess}</b><span class="muted">${T.chessSub}</span></div></div>
+      <div class="stat"><div><b>${me.rating}</b><small>${T.rating}</small></div><div><b>${me.wins}</b><small>${T.wins}</small></div>
+        <div><b>${me.losses}</b><small>${T.losses}</small></div><div><b>${me.draws}</b><small>${T.draws}</small></div></div>
+      <button class="btn red" id="b-search">${T.search}</button><button class="btn" id="b-invite">${T.invite}</button></div>
+    ${games ? `<div class="card"><h2>${T.my}</h2><div class="list">${games}</div></div>` : ""}
+    <div class="card"><h2>${T.top}<span>${L3("победы–поражения–ничьи", "W–L–D", "V–D–N")}</span></h2>
+      ${top ? `<div class="list">${top}</div>` : `<div class="muted">${T.topEmpty}</div>`}</div>`;
+}
+
+// ---- партия
+const GLYPH = { k: "♚", q: "♛", r: "♜", b: "♝", n: "♞", p: "♟" };
+function parseFen(fen) {
+  const rows = fen.split(" ")[0].split("/"), out = {};
+  rows.forEach((row, i) => {
+    let f = 0;
+    for (const ch of row) {
+      if (/\d/.test(ch)) { f += +ch; continue; }
+      out["abcdefgh"[f] + (8 - i)] = ch; f++;
+    }
+  });
+  return out;
+}
+function boardHTML(g) {
+  const pos = parseFen(g.fen), black = g.you === "black";
+  const files = "abcdefgh", ranks = "87654321";
+  const targets = state.sel ? g.legal.filter(m => m.startsWith(state.sel)).map(m => m.slice(2, 4)) : [];
+  const last = g.last ? [g.last.slice(0, 2), g.last.slice(2, 4)] : [];
+  const kingInCheck = g.check ? Object.keys(pos).find(s => pos[s] === (g.turn === "white" ? "K" : "k")) : "";
+  let html = "";
+  for (let r = 0; r < 8; r++) for (let f = 0; f < 8; f++) {
+    const file = black ? files[7 - f] : files[f], rank = black ? ranks[7 - r] : ranks[r], sq = file + rank;
+    const light = (files.indexOf(file) + +rank) % 2 === 1, pc = pos[sq];
+    const cls = ["sq", light ? "l" : "d", last.includes(sq) ? "last" : "", state.sel === sq ? "sel" : "", kingInCheck === sq ? "check" : ""].join(" ");
+    html += `<div class="${cls}" data-sq="${sq}">` +
+      (pc ? `<span class="p ${pc === pc.toUpperCase() ? "w" : "b"}">${GLYPH[pc.toLowerCase()]}︎</span>` : "") +
+      (targets.includes(sq) ? (pc ? `<span class="ring"></span>` : `<span class="dot"></span>`) : "") +
+      (r === 7 ? `<span class="cf">${file}</span>` : "") + (f === 0 ? `<span class="cr">${rank}</span>` : "") + `</div>`;
+  }
+  return `<div class="board" id="board">${html}</div>`;
+}
+function playerBar(p, color, turn) {
+  if (!p) return `<div class="player"><div class="av">?</div><div class="who"><b>…</b></div></div>`;
+  return `<div class="player${turn ? " turn" : ""}"><div class="av ${color === "white" ? "w" : "b"}">${esc((p.name || "?")[0])}</div>
+    <div class="who">${playerLine(p)}</div><div class="rt">${p.rating}</div></div>`;
+}
+function inviteLink(id) { return BOT ? `https://t.me/${BOT}?start=chess_${id}` : ""; }
+function share(id) {
+  const link = inviteLink(id);
+  if (!link) { prompt(T.noBot, location.href.split("?")[0] + "?g=" + id); return; }
+  const url = `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(T.inviteText)}`;
+  if (tg && tg.openTelegramLink) tg.openTelegramLink(url); else window.open(url, "_blank");
+}
+function gameHTML() {
+  const g = state.game;
+  const backBtn = `<button class="btn small" id="b-back" style="width:auto;margin:0 0 10px;padding:8px 14px">${T.back}</button>`;
+  if (g.status === "wait") {
+    const friend = g.kind === "invite";
+    return backBtn + `<div class="card wait"><div class="big">${friend ? "🤝" : "🔍"}</div>
+      <h2 style="justify-content:center">${friend ? T.waitFriend : T.searching}</h2>
+      <div class="muted">${friend ? T.waitFriendSub : T.searchingSub}</div>
+      ${friend && g.mine ? `<button class="btn red" id="b-share">${T.share}</button>` : ""}
+      ${g.mine ? `<button class="btn" id="b-cancel">${T.cancel}</button>` : ""}</div>`;
+  }
+  const me = g.you || "white", opp = me === "white" ? "black" : "white";
+  let status = "", cls = "";
+  if (g.status === "over") {
+    const won = (g.result === "1-0" && me === "white") || (g.result === "0-1" && me === "black");
+    const reason = T.reasons[g.reason] || g.reason;
+    if (g.result === "1/2-1/2") status = `${T.draw} · ${reason}`;
+    else { status = `${won ? T.win : T.lose} · ${reason}`; cls = won ? "win" : "lose"; }
+  } else status = (g.your_turn ? T.yourTurn : T.theirTurn) + (g.check ? " · " + T.check : "");
+  const draw = g.status === "play" && g.you ? (g.draw_offer === "them"
+    ? `<div class="card" style="text-align:center"><b>${T.drawAsk}</b><div class="row"><button class="btn small red" id="b-acc">${T.accept}</button>
+        <button class="btn small" id="b-dec">${T.decline}</button></div></div>` : "") : "";
+  const actions = g.status === "play" && g.you ? `<div class="row"><button class="btn small" id="b-draw"${g.draw_offer === "you" ? " disabled" : ""}>
+      ${g.draw_offer === "you" ? T.drawSent : T.offerDraw}</button><button class="btn small" id="b-resign">${T.resign}</button></div>` : "";
+  return backBtn + draw + `<div class="card" style="padding:12px">
+    ${playerBar(g[opp], opp, g.status === "play" && g.turn === opp)}
+    ${boardHTML(g)}
+    ${playerBar(g[me], me, g.status === "play" && g.turn === me)}
+    <div class="status ${cls}">${esc(status)}</div>
+    <div class="promo" id="promo">${["q", "r", "b", "n"].map(p => `<button data-p="${p}">${GLYPH[p]}︎</button>`).join("")}</div>
+    ${actions}</div>`;
+}
+
+async function act(body) {
+  try {
+    state.game = await api("/api/act", { id: state.game.id, ...body });
+    render();
+  } catch (e) { showErr(e.message); }
+}
+function onSquare(sq) {
+  const g = state.game;
+  if (!g || !g.your_turn) return;
+  if (state.sel) {
+    const opts = g.legal.filter(m => m.startsWith(state.sel + sq));
+    if (opts.length > 1) { state.promo = state.sel + sq; render(); document.getElementById("promo").classList.add("on"); return; }
+    if (opts.length === 1) { const uci = opts[0]; state.sel = null; haptic("light"); act({ action: "move", uci }); return; }
+  }
+  const mine = g.legal.some(m => m.startsWith(sq));
+  state.sel = mine && state.sel !== sq ? sq : null;
+  if (state.sel) haptic("sel");
+  render();
+}
+
+function render() {
+  const app = document.getElementById("app");
+  if (!(tg && tg.initData)) { app.innerHTML = `<h1>${T.title}</h1><div class="card muted">${T.noTg}</div>`; return; }
+  if (state.view === "game" && state.game) {
+    app.innerHTML = gameHTML();
+    const g = state.game;
+    const $ = id => document.getElementById(id);
+    $("b-back").onclick = () => { state.view = "lobby"; state.game = null; state.sel = null; render(); tick(); };
+    if ($("b-share")) $("b-share").onclick = () => share(g.id);
+    if ($("b-cancel")) $("b-cancel").onclick = async () => {
+      try { await api("/api/act", { id: g.id, action: "cancel" }); } catch (e) {}
+      state.view = "lobby"; state.game = null; render(); tick();
+    };
+    if ($("board")) $("board").onclick = e => { const s = e.target.closest("[data-sq]"); if (s) onSquare(s.dataset.sq); };
+    document.querySelectorAll("#promo button").forEach(b => b.onclick = () => {
+      const uci = state.promo + b.dataset.p; state.promo = null; state.sel = null; act({ action: "move", uci });
+    });
+    if ($("b-resign")) $("b-resign").onclick = () => {
+      const go = ok => ok && act({ action: "resign" });
+      if (tg && tg.showConfirm) tg.showConfirm(T.sureResign, go); else go(confirm(T.sureResign));
+    };
+    if ($("b-draw")) $("b-draw").onclick = () => act({ action: "offer" });
+    if ($("b-acc")) $("b-acc").onclick = () => act({ action: "accept" });
+    if ($("b-dec")) $("b-dec").onclick = () => act({ action: "decline" });
+    return;
+  }
+  app.innerHTML = lobbyHTML();
+  document.getElementById("b-search").onclick = () => start("search");
+  document.getElementById("b-invite").onclick = () => start("invite");
+  document.querySelectorAll("[data-g]").forEach(el => el.onclick = () => openGame(el.dataset.g));
+}
+async function start(kind) {
+  try {
+    state.game = await api("/api/new", { kind }); state.view = "game"; state.sel = null; render();
+    if (kind === "invite") share(state.game.id);
+    haptic("light"); poll(2000);
+  } catch (e) { showErr(e.message); }
+}
+async function openGame(id, join) {
+  try {
+    state.game = join ? await api("/api/act", { id, action: "join" }) : await api("/api/game?id=" + encodeURIComponent(id));
+    state.view = "game"; state.sel = null; render(); poll(2000);
+  } catch (e) { showErr(e.message); state.view = "lobby"; render(); tick(); }
+}
+
+render();
+if (tg && tg.initData) {
+  if (params.get("g")) openGame(params.get("g"), true);  // пришли по ссылке-приглашению
+  else tick();
+}
+</script>
+</body>
+</html>

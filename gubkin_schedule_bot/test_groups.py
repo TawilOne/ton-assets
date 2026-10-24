@@ -1214,3 +1214,14 @@ def test_sync_retries_after_short_connection_drop(tmp_path, monkeypatch):
     monkeypatch.setattr(sync, "ssh", lambda *a, **kw: R())
     sync.download(False, "root@test")  # не падает: текущая неделя скачалась со второй попытки
     assert (MONDAY, "10706") in client._cache and client._cache[(MONDAY, "10706")][1]
+
+
+def test_chess_invite_link_opens_the_game(env):
+    """t.me/бот?start=chess_<id> — кнопка, открывающая партию в мини-приложении."""
+    u = update(uid=9, text="/start chess_abc123")
+    c = ctx(args=["chess_abc123"])
+    c.bot = Obj(username="gubkin_test_bot")
+    run(bot.cmd_start(u, c))
+    text, kw = u.effective_message.sent[-1]
+    url = kw["reply_markup"].inline_keyboard[0][0].web_app.url
+    assert "шахматы" in text and "games.html?g=abc123" in url and "bot=gubkin_test_bot" in url

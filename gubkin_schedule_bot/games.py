@@ -1,0 +1,402 @@
+"""Сервер мини-игр для мини-приложения (пока — шахматы): партии, поиск соперника, приглашения, рейтинг.
+
+    python games.py          — слушает 127.0.0.1:8090; снаружи HTTPS даёт Caddy (deploy/games.sh)
+
+Кто играет, сервер узнаёт по подписи Telegram (initData мини-приложения, проверяется токеном бота) —
+подделать чужое имя или рейтинг нельзя. Ходы проверяет python-chess: незаконный ход не пройдёт.
+Факультет игрока берётся из группы, которую он выбрал в боте (user_groups.json, groups.json рядом).
+Партии и рейтинг — в games.db (SQLite).
+"""
+from __future__ import annotations
+
+import hashlib
+import hmac
+import json
+import logging
+import os
+import pathlib
+import random
+import secrets
+import sqlite3
+import time
+import urllib.parse
+
+import chess
+from aiohttp import web
+
+from faculties import FACULTIES
+
+HERE = pathlib.Path(__file__).resolve().parent
+DB_FILE = HERE / "games.db"
+# откуда открывается мини-приложение (GitHub Pages); для проверки на своём компьютере — GAMES_ORIGINS
+ORIGINS = {"https://tawilone.github.io", *filter(None, os.environ.get("GAMES_ORIGINS", "").split())}
+AUTH_MAX_AGE = 2 * 86400   # подпись Telegram действует двое суток с открытия мини-приложения
+INACTIVE = 3 * 86400       # три дня без хода — тот, чей ход, проигрывает по времени
+WAIT_MAX = 86400           # приглашение и поиск соперника живут сутки
+START_RATING, K = 1200, 32
+
+log = logging.getLogger("games")
+
+
+def bot_token() -> str:
+    tok = os.environ.get("BOT_TOKEN")
+    if not tok:
+        try:
+            tok = next((l.strip() for l in (HERE / "token.txt").read_text(encoding="utf-8").splitlines() if l.strip()), "")
+        except OSError:
+            tok = ""
+    return tok
+
+
+def check_init_data(init: str, token: str, now: float | None = None) -> dict | None:
+    """Проверка подписи Telegram (https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app).
+    Возвращает пользователя {"id", "first_name", ...} или None, если подпись неверна или устарела."""
+    if not init or not token:
+        return None
+    data = dict(urllib.parse.parse_qsl(init, keep_blank_values=True))
+    got = data.pop("hash", "")
+    check = "\n".join(f"{k}={v}" for k, v in sorted(data.items()))
+    secret = hmac.new(b"WebAppData", token.encode(), hashlib.sha256).digest()
+    if not hmac.compare_digest(hmac.new(secret, check.encode(), hashlib.sha256).hexdigest(), got):
+        return None
+    try:
+        if (now or time.time()) - int(data.get("auth_date", 0)) > AUTH_MAX_AGE:
+            return None
+        user = json.loads(data.get("user") or "{}")
+    except (ValueError, TypeError):
+        return None
+    return user if isinstance(user, dict) and isinstance(user.get("id"), int) else None
+
+
+def short_name(user: dict) -> str:
+    """«Иван П.» — имя и первая буква фамилии: в общем рейтинге полную фамилию не показываем."""
+    first = str(user.get("first_name") or "").strip()[:24]
+    last = str(user.get("last_name") or "").strip()
+    name = f"{first} {last[0]}." if first and last else first or (last[:24] if last else "")
+    return name or "Игрок"
+
+
+def faculty_of(uid: int) -> str:
+    """Факультет по группе, выбранной в боте; пусто — группа не выбрана."""
+    try:
+        chosen = json.loads((HERE / "user_groups.json").read_text(encoding="utf-8"))
+        code = chosen.get(str(uid))
+        if not code:
+            return ""
+        facs = json.loads((HERE / "groups.json").read_text(encoding="utf-8")).get("faculties") or []
+    except (OSError, ValueError, AttributeError):
+        return ""
+    key = next((f.get("key") for f in facs for g in f.get("groups") or [] if g.get("code") == code), None)
+    return next((f["ru"] for f in FACULTIES if f["key"] == key), "")
+
+
+class GameError(Exception):
+    """Понятная игроку причина отказа (чужой ход, незаконный ход, партия уже закончена…)."""
+
+
+class NotSigned(Exception):
+    """Запрос не из Telegram (нет подписи или она неверна)."""
+
+
+class Store:
+    def __init__(self, path: pathlib.Path | str = DB_FILE):
+        self.db = sqlite3.connect(str(path))
+        self.db.row_factory = sqlite3.Row
+        self.db.executescript("""
+            CREATE TABLE IF NOT EXISTS players (id INTEGER PRIMARY KEY, name TEXT, rating INTEGER,
+                wins INTEGER DEFAULT 0, losses INTEGER DEFAULT 0, draws INTEGER DEFAULT 0, seen REAL);
+            CREATE TABLE IF NOT EXISTS games (id TEXT PRIMARY KEY, kind TEXT, creator INTEGER,
+                white INTEGER, black INTEGER, moves TEXT DEFAULT '', status TEXT, result TEXT DEFAULT '',
+                reason TEXT DEFAULT '', draw_offer INTEGER DEFAULT 0, created REAL, updated REAL);
+            CREATE INDEX IF NOT EXISTS games_status ON games(status, kind);
+        """)
+        self.db.commit()
+
+    # ---- игроки
+
+    def touch(self, user: dict) -> None:
+        uid, now = user["id"], time.time()
+        self.db.execute("INSERT INTO players (id, name, rating, seen) VALUES (?, ?, ?, ?) "
+                        "ON CONFLICT(id) DO UPDATE SET name = excluded.name, seen = excluded.seen",
+                        (uid, short_name(user), START_RATING, now))
+        self.db.commit()
+
+    def player(self, uid: int | None) -> dict | None:
+        if not uid:
+            return None
+        r = self.db.execute("SELECT * FROM players WHERE id = ?", (uid,)).fetchone()
+        if not r:
+            return None
+        return {"id": r["id"], "name": r["name"], "rating": r["rating"], "wins": r["wins"],
+                "losses": r["losses"], "draws": r["draws"], "faculty": faculty_of(r["id"])}
+
+    def top(self, limit: int = 50) -> list[dict]:
+        rows = self.db.execute("SELECT id FROM players WHERE wins + losses + draws > 0 "
+                               "ORDER BY rating DESC, wins DESC LIMIT ?", (limit,)).fetchall()
+        return [self.player(r["id"]) for r in rows]
+
+    # ---- партии
+
+    def _get(self, gid: str) -> sqlite3.Row:
+        r = self.db.execute("SELECT * FROM games WHERE id = ?", (gid,)).fetchone()
+        if not r:
+            raise GameError("Партия не найдена")
+        return self._expire(r)
+
+    def _expire(self, g: sqlite3.Row) -> sqlite3.Row:
+        """Брошенные партии: приглашение/поиск — сутки, без хода — 3 дня (проигрывает тот, чей ход)."""
+        now = time.time()
+        if g["status"] == "wait" and now - g["created"] > WAIT_MAX:
+            self.db.execute("DELETE FROM games WHERE id = ?", (g["id"],))
+            self.db.commit()
+            raise GameError("Приглашение устарело")
+        if g["status"] == "play" and now - g["updated"] > INACTIVE:
+            board = self._board(g)
+            loser_white = board.turn == chess.WHITE
+            self._finish(g, "0-1" if loser_white else "1-0", "time")
+            return self.db.execute("SELECT * FROM games WHERE id = ?", (g["id"],)).fetchone()
+        return g
+
+    @staticmethod
+    def _board(g) -> chess.Board:
+        board = chess.Board()
+        for uci in (g["moves"] or "").split():
+            board.push_uci(uci)
+        return board
+
+    def create(self, uid: int, kind: str) -> str:
+        """kind: "invite" — партия по ссылке для друга; "search" — открытый поиск соперника."""
+        if kind == "search":
+            # уже ищем — не плодим второй поиск; есть чужой поиск — садимся к нему
+            mine = self.db.execute("SELECT id FROM games WHERE status = 'wait' AND kind = 'search' AND creator = ?",
+                                   (uid,)).fetchone()
+            for g in self.db.execute("SELECT * FROM games WHERE status = 'wait' AND kind = 'search' AND creator != ? "
+                                     "ORDER BY created", (uid,)).fetchall():
+                try:
+                    self._expire(g)
+                except GameError:
+                    continue
+                if mine:
+                    self.db.execute("DELETE FROM games WHERE id = ?", (mine["id"],))
+                return self.join(uid, g["id"])
+            if mine:
+                return mine["id"]
+        gid = secrets.token_urlsafe(6).replace("-", "x").replace("_", "y")
+        now = time.time()
+        self.db.execute("INSERT INTO games (id, kind, creator, status, created, updated) VALUES (?, ?, ?, 'wait', ?, ?)",
+                        (gid, kind, uid, now, now))
+        self.db.commit()
+        return gid
+
+    def join(self, uid: int, gid: str) -> str:
+        g = self._get(gid)
+        if g["status"] != "wait":
+            if uid in (g["white"], g["black"]):
+                return gid  # уже в этой партии — просто откроем её
+            raise GameError("В эту партию уже играют")
+        if g["creator"] == uid:
+            return gid  # своё приглашение — ждём друга
+        white, black = (uid, g["creator"]) if random.random() < 0.5 else (g["creator"], uid)
+        self.db.execute("UPDATE games SET white = ?, black = ?, status = 'play', updated = ? WHERE id = ?",
+                        (white, black, time.time(), gid))
+        self.db.commit()
+        return gid
+
+    def cancel(self, uid: int, gid: str) -> None:
+        g = self._get(gid)
+        if g["status"] != "wait" or g["creator"] != uid:
+            raise GameError("Эту партию отменить нельзя")
+        self.db.execute("DELETE FROM games WHERE id = ?", (gid,))
+        self.db.commit()
+
+    def _mine(self, g, uid: int) -> chess.Color:
+        if g["status"] != "play":
+            raise GameError("Партия уже закончилась" if g["status"] == "over" else "Соперник ещё не пришёл")
+        if uid not in (g["white"], g["black"]):
+            raise GameError("Вы не играете в этой партии")
+        return chess.WHITE if uid == g["white"] else chess.BLACK
+
+    def move(self, uid: int, gid: str, uci: str) -> None:
+        g = self._get(gid)
+        color = self._mine(g, uid)
+        board = self._board(g)
+        if board.turn != color:
+            raise GameError("Сейчас ход соперника")
+        try:
+            mv = chess.Move.from_uci(uci)
+        except ValueError:
+            raise GameError("Непонятный ход") from None
+        if mv not in board.legal_moves:
+            raise GameError("Так ходить нельзя")
+        board.push(mv)
+        moves = ((g["moves"] or "") + " " + uci).strip()
+        self.db.execute("UPDATE games SET moves = ?, draw_offer = 0, updated = ? WHERE id = ?",
+                        (moves, time.time(), gid))
+        self.db.commit()
+        out = board.outcome(claim_draw=True)  # мат, пат, троекратное повторение, мало фигур, 50 ходов
+        if out:
+            result = "1-0" if out.winner == chess.WHITE else "0-1" if out.winner == chess.BLACK else "1/2-1/2"
+            self._finish(self._get(gid), result, out.termination.name.lower())
+
+    def resign(self, uid: int, gid: str) -> None:
+        g = self._get(gid)
+        color = self._mine(g, uid)
+        self._finish(g, "0-1" if color == chess.WHITE else "1-0", "resign")
+
+    def draw(self, uid: int, gid: str, action: str) -> None:
+        """action: offer — предложить ничью, accept — принять, decline — отказаться."""
+        g = self._get(gid)
+        self._mine(g, uid)
+        if action == "offer":
+            self.db.execute("UPDATE games SET draw_offer = ? WHERE id = ?", (uid, gid))
+        elif action == "accept" and g["draw_offer"] and g["draw_offer"] != uid:
+            self._finish(g, "1/2-1/2", "agreement")
+            return
+        elif action == "decline" and g["draw_offer"] and g["draw_offer"] != uid:
+            self.db.execute("UPDATE games SET draw_offer = 0 WHERE id = ?", (gid,))
+        else:
+            raise GameError("Ничью сейчас нельзя")
+        self.db.commit()
+
+    def _finish(self, g, result: str, reason: str) -> None:
+        if g["status"] != "play":
+            return
+        self.db.execute("UPDATE games SET status = 'over', result = ?, reason = ?, draw_offer = 0, updated = ? "
+                        "WHERE id = ?", (result, reason, time.time(), g["id"]))
+        w, b = self.player(g["white"]), self.player(g["black"])
+        if w and b:  # рейтинг Эло
+            score = {"1-0": 1.0, "0-1": 0.0}.get(result, 0.5)
+            exp = 1 / (1 + 10 ** ((b["rating"] - w["rating"]) / 400))
+            dw = round(K * (score - exp))
+            col = {1.0: ("wins", "losses"), 0.0: ("losses", "wins")}.get(score, ("draws", "draws"))
+            self.db.execute(f"UPDATE players SET rating = rating + ?, {col[0]} = {col[0]} + 1 WHERE id = ?", (dw, w["id"]))
+            self.db.execute(f"UPDATE players SET rating = rating - ?, {col[1]} = {col[1]} + 1 WHERE id = ?", (dw, b["id"]))
+        self.db.commit()
+
+    def view(self, uid: int, gid: str) -> dict:
+        g = self._get(gid)
+        board = self._board(g)
+        you = "white" if uid == g["white"] else "black" if uid == g["black"] else ""
+        my_turn = g["status"] == "play" and you and (board.turn == chess.WHITE) == (you == "white")
+        moves = (g["moves"] or "").split()
+        return {
+            "id": g["id"], "kind": g["kind"], "status": g["status"], "result": g["result"], "reason": g["reason"],
+            "fen": board.fen(), "moves": moves, "last": moves[-1] if moves else "",
+            "turn": "white" if board.turn == chess.WHITE else "black", "check": board.is_check(),
+            "you": you, "mine": g["creator"] == uid, "your_turn": bool(my_turn),
+            "legal": [m.uci() for m in board.legal_moves] if my_turn else [],
+            "white": self.player(g["white"]), "black": self.player(g["black"]),
+            "creator": self.player(g["creator"]) if g["status"] == "wait" else None,
+            "draw_offer": "you" if g["draw_offer"] == uid else "them" if g["draw_offer"] else "",
+        }
+
+    def my_games(self, uid: int) -> list[dict]:
+        rows = self.db.execute("SELECT id FROM games WHERE (white = ? OR black = ? OR creator = ?) "
+                               "AND status != 'over' ORDER BY updated DESC", (uid, uid, uid)).fetchall()
+        out = []
+        for r in rows:
+            try:
+                out.append(self.view(uid, r["id"]))
+            except GameError:
+                continue
+        return out
+
+
+# ---- HTTP
+
+def make_app(store: Store, token: str) -> web.Application:
+    @web.middleware
+    async def cors(request, handler):
+        if request.method == "OPTIONS":
+            resp = web.Response()
+        else:
+            try:
+                resp = await handler(request)
+            except NotSigned:  # и у отказов — заголовки CORS, иначе браузер не покажет причину
+                resp = web.json_response({"error": "Откройте игру из Telegram"}, status=401)
+            except GameError as e:
+                resp = web.json_response({"error": str(e)}, status=400)
+        origin = request.headers.get("Origin", "")
+        if origin in ORIGINS:
+            resp.headers["Access-Control-Allow-Origin"] = origin
+            resp.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Init-Data"
+            resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+            resp.headers["Vary"] = "Origin"
+        return resp
+
+    def who(request) -> int:
+        user = check_init_data(request.headers.get("X-Init-Data", ""), token)
+        if not user:
+            raise NotSigned
+        store.touch(user)
+        return user["id"]
+
+    async def body(request) -> dict:
+        try:
+            data = await request.json()
+            return data if isinstance(data, dict) else {}
+        except ValueError:
+            return {}
+
+    async def ping(request):
+        return web.json_response({"ok": True})
+
+    async def me(request):
+        uid = who(request)
+        return web.json_response({"me": store.player(uid), "games": store.my_games(uid)})
+
+    async def top(request):
+        who(request)
+        return web.json_response({"top": store.top()})
+
+    async def new(request):
+        uid = who(request)
+        kind = (await body(request)).get("kind")
+        if kind not in ("invite", "search"):
+            raise GameError("Непонятный вид партии")
+        return web.json_response(store.view(uid, store.create(uid, kind)))
+
+    async def game(request):
+        return web.json_response(store.view(who(request), request.query.get("id", "")))
+
+    async def act(request):
+        uid = who(request)
+        d = await body(request)
+        gid, action = str(d.get("id", "")), d.get("action")
+        if action == "join":
+            gid = store.join(uid, gid)
+        elif action == "cancel":
+            store.cancel(uid, gid)
+            return web.json_response({"ok": True})
+        elif action == "move":
+            store.move(uid, gid, str(d.get("uci", "")))
+        elif action == "resign":
+            store.resign(uid, gid)
+        elif action in ("offer", "accept", "decline"):
+            store.draw(uid, gid, action)
+        else:
+            raise GameError("Непонятное действие")
+        return web.json_response(store.view(uid, gid))
+
+    app = web.Application(middlewares=[cors], client_max_size=16 * 1024)
+    app.router.add_get("/api/ping", ping)
+    app.router.add_get("/api/me", me)
+    app.router.add_get("/api/top", top)
+    app.router.add_get("/api/game", game)
+    app.router.add_post("/api/new", new)
+    app.router.add_post("/api/act", act)
+    app.router.add_route("OPTIONS", "/api/{tail:.*}", ping)
+    return app
+
+
+def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
+    token = bot_token()
+    if not token:
+        raise SystemExit("Нет токена бота (token.txt рядом или BOT_TOKEN) — без него не проверить игроков")
+    web.run_app(make_app(Store(), token), host="127.0.0.1", port=int(os.environ.get("GAMES_PORT", "8090")),
+                print=None)
+
+
+if __name__ == "__main__":
+    main()
