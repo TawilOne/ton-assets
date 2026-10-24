@@ -154,6 +154,8 @@ const T = {
            L3("🔥 Сильный", "🔥 Strong", "🔥 Fort")],
   botNote: L3("Тренировка: партии с ботом не идут в рейтинг и статистику", "Practice: games with the bot don't count towards rating or stats",
               "Entraînement : les parties contre le bot ne comptent ni pour le classement ni pour les statistiques"),
+  oppCancelled: L3("Соперник передумал — ищем другого", "Your opponent cancelled — looking for another one",
+                   "L'adversaire a annulé — on en cherche un autre"),
   botThinks: L3("Бот думает…", "The bot is thinking…", "Le bot réfléchit…"),
   oppAway: t => L3(`⏳ Соперник вышел из игры. Если не вернётся за ${t} — победа ваша`,
                    `⏳ Your opponent left. If they don't return within ${t}, you win`,
@@ -217,7 +219,7 @@ async function api(path, body) {
     body: body ? JSON.stringify(body) : undefined,
   }); } catch (e) { throw new Error(T.offline); }  // нет сети или сервер недоступен — понятными словами
   const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(data.error || T.offline);
+  if (!r.ok) throw Object.assign(new Error(data.error || T.offline), { status: r.status });
   return data;
 }
 
@@ -233,6 +235,7 @@ async function tick() {
       // пока наш ход летит на сервер или фигуру тащат — не мешаем
       if (!state.pending && !drag && state.game && g.id === state.game.id && JSON.stringify(g) !== JSON.stringify(state.game)) {
         const moved = g.last && g.last !== state.game.last;
+        if (g.status === "wait" && state.game.status === "play") showErr(T.oppCancelled);  // соперник передумал — ищем другого
         if (g.your_turn && !state.game.your_turn) haptic("medium");
         state.game = g;
         if (state.game.status !== "wait" && document.getElementById("board")) update(moved ? g.last.slice(0, 2) : undefined);
@@ -242,7 +245,11 @@ async function tick() {
     } else {
       await loadLobby(); poll(8000);
     }
-  } catch (e) { poll(5000); }
+  } catch (e) {
+    if (e.status === 400 && state.view === "game") {  // партии больше нет (соперник отменил приглашение)
+      showErr(e.message); state.view = "lobby"; state.game = null; render(); poll(0);
+    } else poll(5000);
+  }
 }
 async function loadLobby() {
   const [me, top] = await Promise.all([api("/api/me"), api("/api/top")]);
@@ -536,7 +543,9 @@ function render() {
       app.innerHTML = waitHTML(g);
       if (document.getElementById("b-share")) document.getElementById("b-share").onclick = () => share(g.id);
       if (document.getElementById("b-cancel")) document.getElementById("b-cancel").onclick = async () => {
-        try { await api("/api/act", { id: g.id, action: "cancel" }); } catch (e) {}
+        try { await api("/api/act", { id: g.id, action: "cancel" }); } catch (e) {
+          if (e.status === 400) { showErr(e.message); poll(0); return; }  // партия уже началась — показываем её
+        }
         state.view = "lobby"; state.game = null; render(); tick();
       };
     } else if (!document.getElementById("board") || app.dataset.game !== g.id) {

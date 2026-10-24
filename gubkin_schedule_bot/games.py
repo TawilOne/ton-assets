@@ -37,6 +37,7 @@ ORIGINS = {"https://tawilone.github.io", *filter(None, os.environ.get("GAMES_ORI
 AUTH_MAX_AGE = 2 * 86400   # подпись Telegram действует двое суток с открытия мини-приложения
 INACTIVE = 3 * 86400       # три дня без хода — тот, чей ход, проигрывает по времени
 ABANDON = 3 * 60           # вышел из партии (закрыл мини-приложение/Telegram) и не вернулся за 3 минуты — поражение
+CANCEL_RACE = 15           # соперник подсел за секунды до «Отменить» — отмена всё равно срабатывает
 GRACE = 20                 # мини-приложение спрашивает сервер каждые 2–8 с; тишина дольше — человека нет на месте
 WAIT_MAX = 86400           # приглашение и поиск соперника живут сутки
 START_RATING, K = 1200, 32
@@ -246,8 +247,21 @@ class Store:
 
     def cancel(self, uid: int, gid: str) -> None:
         g = self._get(gid)
-        if g["status"] != "wait" or g["creator"] != uid:
+        if g["creator"] != uid or g["status"] == "over":
             raise GameError("Эту партию отменить нельзя")
+        if g["status"] == "play":
+            # экран поиска обновляется раз в 2 с: соперник мог подсесть прямо перед нажатием «Отменить».
+            # Пока ходов не было — отмена срабатывает, а подсевший снова ищет соперника (в той же партии)
+            if g["moves"] or time.time() - g["updated"] > CANCEL_RACE:
+                raise GameError("Соперник уже нашёлся — партия началась")
+            if g["kind"] == "search":
+                other = g["black"] if g["white"] == uid else g["white"]
+                now = time.time()
+                self.db.execute("UPDATE games SET creator = ?, white = NULL, black = NULL, status = 'wait', "
+                                "draw_offer = 0, seen_w = 0, seen_b = 0, created = ?, updated = ? WHERE id = ?",
+                                (other, now, now, gid))
+                self.db.commit()
+                return
         self.db.execute("DELETE FROM games WHERE id = ?", (gid,))
         self.db.commit()
 

@@ -265,3 +265,33 @@ def test_search_skips_players_who_left(store, monkeypatch):
     assert new != old and store.view(2, new)["status"] == "wait"
     store.touch({"id": 3, "first_name": "Олег"})
     assert store.create(3, "search") == new  # Мария ищет прямо сейчас — к ней и садимся
+
+
+def test_cancel_right_after_opponent_joined(store, monkeypatch):
+    """Нажал «Отменить» поиск, а соперник подсел за секунду до этого: отмена срабатывает,
+    подсевший снова ищет соперника. Если уже ходили или прошло время — отменить нельзя."""
+    now = [time.time()]
+    monkeypatch.setattr(games.time, "time", lambda: now[0])
+    gid = store.create(1, "search")
+    assert store.create(2, "search") == gid  # Мария подсела
+    now[0] += 2
+    store.cancel(1, gid)
+    v = store.view(2, gid)
+    assert v["status"] == "wait" and v["mine"] and v["kind"] == "search"  # Мария снова ищет
+    assert not [g for g in store.my_games(1)]  # у Ивана партии нет
+    assert store.create(3, "search") == gid  # к Марии подсел Олег
+    with pytest.raises(games.GameError):
+        store.cancel(1, gid)  # Иван к этой партии уже отношения не имеет
+
+    gid = store.create(1, "invite")  # приглашение: друг открыл ссылку, а автор нажал «Отменить»
+    store.join(2, gid)
+    store.cancel(1, gid)
+    with pytest.raises(games.GameError):
+        store.view(2, gid)
+
+    gid = store.create(1, "invite")  # прошло больше 15 с — партия идёт, отменить нельзя
+    store.join(2, gid)
+    now[0] += 30
+    with pytest.raises(games.GameError):
+        store.cancel(1, gid)
+    assert store.view(1, gid)["status"] == "play"
