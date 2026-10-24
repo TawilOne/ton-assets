@@ -140,6 +140,10 @@ def test_http_api(store):
             assert r.status == 400 and "соперника" in (await r.json())["error"]
             me = await (await client.get("/api/me", headers=h1)).json()
             assert me["me"]["faculty"] == "⛏ Геологии и геофизики" and [g["id"] for g in me["games"]] == [gid]
+            assert me["searching"] == 0
+            await client.post("/api/new", json={"kind": "search"}, headers=h2)
+            assert (await (await client.get("/api/searching", headers=h1)).json()) == {"searching": 1}
+            assert (await client.get("/api/searching")).status == 401
             r = await client.options("/api/act", headers={"Origin": "https://tawilone.github.io"})
             assert r.status == 200 and "X-Init-Data" in r.headers["Access-Control-Allow-Headers"]
         finally:

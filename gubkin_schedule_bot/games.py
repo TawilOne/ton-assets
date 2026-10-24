@@ -554,6 +554,9 @@ def make_app(store: Store, token: str, engine: Engine | None = None) -> web.Appl
         return web.json_response({"me": store.player(uid), "games": store.my_games(uid, here=True),
                                   "searching": store.searching(uid)})
 
+    async def searching(request):  # лобби спрашивает каждые 2 с — только число, без списка и рейтинга
+        return web.json_response({"searching": store.searching(who(request))})
+
     async def top(request):
         who(request)
         return web.json_response({"top": store.top()})
@@ -603,6 +606,7 @@ def make_app(store: Store, token: str, engine: Engine | None = None) -> web.Appl
     app.router.add_get("/api/ping", ping)
     app.router.add_get("/api/me", me)
     app.router.add_get("/api/top", top)
+    app.router.add_get("/api/searching", searching)
     app.router.add_get("/api/game", game)
     app.router.add_post("/api/new", new)
     app.router.add_post("/api/act", act)

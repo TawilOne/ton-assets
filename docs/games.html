@@ -253,13 +253,22 @@ async function tick() {
       }
       poll(g.status === "over" ? 15000 : 2000);
     } else {
-      await loadLobby(); poll(8000);
+      // счётчик «ищут игру» — каждые 2 с лёгким запросом, весь список и рейтинг — раз в 8 с
+      if (!state.lobbyAt || Date.now() - state.lobbyAt > 7500) { await loadLobby(); state.lobbyAt = Date.now(); }
+      else showSeeking((await api("/api/searching")).searching || 0);
+      poll(2000);
     }
   } catch (e) {
     if (e.status === 400 && state.view === "game") {  // партии больше нет (соперник отменил приглашение)
       showErr(e.message); state.view = "lobby"; state.game = null; render(); poll(0);
     } else poll(5000);
   }
+}
+function showSeeking(n) {
+  const el = document.querySelector(".seeking");
+  if (n === state.searching && el) return;
+  state.searching = n;
+  if (el) { el.className = "seeking" + (n ? " on" : ""); el.innerHTML = T.seeking(n); }
 }
 async function loadLobby() {
   const [me, top] = await Promise.all([api("/api/me"), api("/api/top")]);
@@ -557,14 +566,14 @@ function render() {
         try { await api("/api/act", { id: g.id, action: "cancel" }); } catch (e) {
           if (e.status === 400) { showErr(e.message); poll(0); return; }  // партия уже началась — показываем её
         }
-        state.view = "lobby"; state.game = null; render(); tick();
+        state.view = "lobby"; state.game = null; state.lobbyAt = 0; render(); tick();
       };
     } else if (!document.getElementById("board") || app.dataset.game !== g.id) {
       app.innerHTML = skeleton(g); app.dataset.game = g.id;
       bindBoard(); update();
     } else update();
     document.getElementById("b-back").onclick = () => {
-      state.view = "lobby"; state.game = null; state.sel = null; app.dataset.game = ""; render(); tick();
+      state.view = "lobby"; state.game = null; state.sel = null; state.lobbyAt = 0; app.dataset.game = ""; render(); tick();
     };
     return;
   }
