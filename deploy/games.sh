@@ -11,10 +11,13 @@ HOST="${IP//./-}.sslip.io"
 echo "Адрес игр: https://$HOST"
 
 "$DIR/venv/bin/pip" install -q -r "$DIR/gubkin_schedule_bot/requirements.txt"
-if ! command -v caddy >/dev/null; then
-  echo "Ставлю Caddy (веб-сервер с автоматическим HTTPS)..."
+need=""
+command -v caddy >/dev/null || need="$need caddy"           # веб-сервер с автоматическим HTTPS
+[ -x /usr/games/stockfish ] || need="$need stockfish"       # шахматный движок для игры с ботом
+if [ -n "$need" ]; then
+  echo "Ставлю:$need"
   apt-get update -qq
-  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq caddy >/dev/null
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq $need >/dev/null
 fi
 printf '%s {\n\tencode gzip\n\treverse_proxy 127.0.0.1:8090\n}\n' "$HOST" > /etc/caddy/Caddyfile
 if command -v ufw >/dev/null && ufw status | grep -q "Status: active"; then

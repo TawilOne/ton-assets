@@ -21,7 +21,11 @@ import sqlite3
 import time
 import urllib.parse
 
+import asyncio
+import shutil
+
 import chess
+import chess.engine
 from aiohttp import web
 
 from faculties import FACULTIES
@@ -34,6 +38,9 @@ AUTH_MAX_AGE = 2 * 86400   # подпись Telegram действует двое
 INACTIVE = 3 * 86400       # три дня без хода — тот, чей ход, проигрывает по времени
 WAIT_MAX = 86400           # приглашение и поиск соперника живут сутки
 START_RATING, K = 1200, 32
+BOT = 0  # «игрок» бот: id 0 в партии; партии с ботом не трогают ни рейтинг, ни статистику
+# уровни бота: (название, Skill Level Stockfish 0–20, время на ход, доля случайных ходов)
+BOT_LEVELS = {1: ("Новичок", 0, 0.05, 0.35), 2: ("Средний", 6, 0.2, 0.0), 3: ("Сильный", 15, 0.6, 0.0)}
 
 log = logging.getLogger("games")
 
@@ -110,6 +117,10 @@ class Store:
                 reason TEXT DEFAULT '', draw_offer INTEGER DEFAULT 0, created REAL, updated REAL);
             CREATE INDEX IF NOT EXISTS games_status ON games(status, kind);
         """)
+        try:  # уровень бота (для партий с ботом); у старой базы колонки ещё нет
+            self.db.execute("ALTER TABLE games ADD COLUMN level INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
         self.db.commit()
 
     # ---- игроки
@@ -164,8 +175,18 @@ class Store:
             board.push_uci(uci)
         return board
 
-    def create(self, uid: int, kind: str) -> str:
-        """kind: "invite" — партия по ссылке для друга; "search" — открытый поиск соперника."""
+    def create(self, uid: int, kind: str, level: int = 0) -> str:
+        """kind: "invite" — партия по ссылке для друга; "search" — открытый поиск соперника;
+        "bot" — с ботом уровня level (цвет — случайно; партия сразу начинается)."""
+        if kind == "bot":
+            if level not in BOT_LEVELS:
+                raise GameError("Непонятный уровень бота")
+            gid, now = secrets.token_urlsafe(6).replace("-", "x").replace("_", "y"), time.time()
+            white, black = (uid, BOT) if random.random() < 0.5 else (BOT, uid)
+            self.db.execute("INSERT INTO games (id, kind, creator, white, black, status, level, created, updated) "
+                            "VALUES (?, 'bot', ?, ?, ?, 'play', ?, ?, ?)", (gid, uid, white, black, level, now, now))
+            self.db.commit()
+            return gid
         if kind == "search":
             # уже ищем — не плодим второй поиск; есть чужой поиск — садимся к нему
             mine = self.db.execute("SELECT id FROM games WHERE status = 'wait' AND kind = 'search' AND creator = ?",
@@ -216,9 +237,9 @@ class Store:
             raise GameError("Вы не играете в этой партии")
         return chess.WHITE if uid == g["white"] else chess.BLACK
 
-    def move(self, uid: int, gid: str, uci: str) -> None:
-        g = self._get(gid)
-        color = self._mine(g, uid)
+    def move(self, uid: int, gid: str, uci: str, _bot=None) -> None:
+        g = _bot or self._get(gid)
+        color = self._mine(g, uid) if _bot is None else (chess.WHITE if g["white"] == BOT else chess.BLACK)
         board = self._board(g)
         if board.turn != color:
             raise GameError("Сейчас ход соперника")
@@ -238,6 +259,19 @@ class Store:
             result = "1-0" if out.winner == chess.WHITE else "0-1" if out.winner == chess.BLACK else "1/2-1/2"
             self._finish(self._get(gid), result, out.termination.name.lower())
 
+    def bot_to_move(self, gid: str) -> tuple[str, int] | None:
+        """Если в партии с ботом сейчас его ход — (FEN позиции, уровень), иначе None."""
+        g = self._get(gid)
+        if g["kind"] != "bot" or g["status"] != "play":
+            return None
+        board = self._board(g)
+        bot_white = g["white"] == BOT
+        return (board.fen(), g["level"]) if (board.turn == chess.WHITE) == bot_white else None
+
+    def bot_move(self, gid: str, uci: str) -> None:
+        g = self._get(gid)
+        self.move(BOT, gid, uci, _bot=g)
+
     def resign(self, uid: int, gid: str) -> None:
         g = self._get(gid)
         color = self._mine(g, uid)
@@ -247,6 +281,8 @@ class Store:
         """action: offer — предложить ничью, accept — принять, decline — отказаться."""
         g = self._get(gid)
         self._mine(g, uid)
+        if g["kind"] == "bot":
+            raise GameError("Бот на ничью не соглашается — доиграйте или сдайтесь")
         if action == "offer":
             self.db.execute("UPDATE games SET draw_offer = ? WHERE id = ?", (uid, gid))
         elif action == "accept" and g["draw_offer"] and g["draw_offer"] != uid:
@@ -264,7 +300,7 @@ class Store:
         self.db.execute("UPDATE games SET status = 'over', result = ?, reason = ?, draw_offer = 0, updated = ? "
                         "WHERE id = ?", (result, reason, time.time(), g["id"]))
         w, b = self.player(g["white"]), self.player(g["black"])
-        if w and b:  # рейтинг Эло
+        if w and b and g["kind"] != "bot":  # рейтинг Эло; партии с ботом — не в счёт
             score = {"1-0": 1.0, "0-1": 0.0}.get(result, 0.5)
             exp = 1 / (1 + 10 ** ((b["rating"] - w["rating"]) / 400))
             dw = round(K * (score - exp))
@@ -285,10 +321,16 @@ class Store:
             "turn": "white" if board.turn == chess.WHITE else "black", "check": board.is_check(),
             "you": you, "mine": g["creator"] == uid, "your_turn": bool(my_turn),
             "legal": [m.uci() for m in board.legal_moves] if my_turn else [],
-            "white": self.player(g["white"]), "black": self.player(g["black"]),
+            "white": self._side(g, "white"), "black": self._side(g, "black"), "level": g["level"] or 0,
             "creator": self.player(g["creator"]) if g["status"] == "wait" else None,
             "draw_offer": "you" if g["draw_offer"] == uid else "them" if g["draw_offer"] else "",
         }
+
+    def _side(self, g, color: str) -> dict | None:
+        if g["kind"] == "bot" and g[color] == BOT:
+            return {"id": BOT, "bot": True, "name": "🤖 " + BOT_LEVELS.get(g["level"], ("Бот",))[0],
+                    "rating": None, "faculty": "", "wins": 0, "losses": 0, "draws": 0}
+        return self.player(g[color])
 
     def my_games(self, uid: int) -> list[dict]:
         rows = self.db.execute("SELECT id FROM games WHERE (white = ? OR black = ? OR creator = ?) "
@@ -302,9 +344,95 @@ class Store:
         return out
 
 
+# ---- движок для партий с ботом
+
+def stockfish_path() -> str | None:
+    """Stockfish из пакета Ubuntu лежит в /usr/games — у служб systemd этой папки нет в PATH."""
+    return shutil.which("stockfish") or next((p for p in ("/usr/games/stockfish", "/usr/bin/stockfish")
+                                              if os.path.exists(p)), None)
+
+
+_VALUES = {chess.PAWN: 1, chess.KNIGHT: 3, chess.BISHOP: 3, chess.ROOK: 5, chess.QUEEN: 9, chess.KING: 0}
+
+
+def simple_move(board: chess.Board, level: int) -> chess.Move:
+    """Запасной ход без Stockfish: смотрит на 2 полухода вперёд по материалу (и мат), с долей случайности."""
+    moves = list(board.legal_moves)
+    rnd = BOT_LEVELS.get(level, BOT_LEVELS[1])[3]
+    if random.random() < rnd:
+        return random.choice(moves)
+
+    def material(b: chess.Board, me: chess.Color) -> float:
+        if b.is_checkmate():
+            return -1000 if b.turn == me else 1000
+        return sum(_VALUES[p.piece_type] * (1 if p.color == me else -1) for p in b.piece_map().values())
+
+    me, best, best_score = board.turn, [], None
+    for mv in moves:
+        board.push(mv)
+        replies = list(board.legal_moves)
+        if not replies:
+            score = material(board, me)
+        else:
+            score = None
+            for r in replies:
+                board.push(r)
+                v = material(board, me)
+                board.pop()
+                score = v if score is None else min(score, v)
+        board.pop()
+        if best_score is None or score > best_score:
+            best, best_score = [mv], score
+        elif score == best_score:
+            best.append(mv)
+    return random.choice(best)
+
+
+class Engine:
+    """Один Stockfish на весь сервер (ходы бота — по очереди); нет Stockfish — simple_move."""
+
+    def __init__(self):
+        self.engine = None
+        self.lock = asyncio.Lock()
+
+    def _think(self, fen: str, level: int) -> str:
+        board = chess.Board(fen)
+        name, skill, think, rnd = BOT_LEVELS.get(level, BOT_LEVELS[1])
+        path = stockfish_path()
+        if path is None:
+            return simple_move(board, level).uci()
+        if random.random() < rnd:  # новичок иногда ходит «как попало» — чтобы его можно было обыграть
+            return random.choice(list(board.legal_moves)).uci()
+        try:
+            if self.engine is None:
+                self.engine = chess.engine.SimpleEngine.popen_uci(path)
+            self.engine.configure({"Skill Level": skill})
+            return self.engine.play(board, chess.engine.Limit(time=think)).move.uci()
+        except (chess.engine.EngineError, OSError):  # движок упал — перезапустим в следующий раз
+            log.exception("stockfish")
+            try:
+                self.engine and self.engine.quit()
+            except Exception:  # noqa: BLE001
+                pass
+            self.engine = None
+            return simple_move(board, level).uci()
+
+    async def move(self, fen: str, level: int) -> str:
+        async with self.lock:
+            return await asyncio.to_thread(self._think, fen, level)
+
+
+async def bot_reply(store: Store, engine: Engine, gid: str) -> None:
+    """Если теперь ход бота — бот ходит."""
+    todo = store.bot_to_move(gid)
+    if todo:
+        store.bot_move(gid, await engine.move(*todo))
+
+
 # ---- HTTP
 
-def make_app(store: Store, token: str) -> web.Application:
+def make_app(store: Store, token: str, engine: Engine | None = None) -> web.Application:
+    engine = engine or Engine()
     @web.middleware
     async def cors(request, handler):
         if request.method == "OPTIONS":
@@ -351,10 +479,18 @@ def make_app(store: Store, token: str) -> web.Application:
 
     async def new(request):
         uid = who(request)
-        kind = (await body(request)).get("kind")
-        if kind not in ("invite", "search"):
+        d = await body(request)
+        kind = d.get("kind")
+        if kind not in ("invite", "search", "bot"):
             raise GameError("Непонятный вид партии")
-        return web.json_response(store.view(uid, store.create(uid, kind)))
+        try:
+            level = int(d.get("level") or 0)
+        except (TypeError, ValueError):
+            level = 0
+        gid = store.create(uid, kind, level)
+        if kind == "bot":
+            await bot_reply(store, engine, gid)  # бот играет белыми — сразу его первый ход
+        return web.json_response(store.view(uid, gid))
 
     async def game(request):
         return web.json_response(store.view(who(request), request.query.get("id", "")))
@@ -370,6 +506,7 @@ def make_app(store: Store, token: str) -> web.Application:
             return web.json_response({"ok": True})
         elif action == "move":
             store.move(uid, gid, str(d.get("uci", "")))
+            await bot_reply(store, engine, gid)  # в партии с ботом — сразу его ответ
         elif action == "resign":
             store.resign(uid, gid)
         elif action in ("offer", "accept", "decline"):

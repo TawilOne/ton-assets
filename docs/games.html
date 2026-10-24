@@ -65,10 +65,10 @@
   .player .rt { color: var(--muted); font-variant-numeric: tabular-nums; font-weight: 700; }
   .player.turn .av { box-shadow: 0 0 0 3px var(--red); }
   /* доска целиком в экране и в альбомной ориентации: не выше экрана минус полоски игроков */
-  .board { display: grid; grid-template-columns: repeat(8, 1fr); width: 100%; max-width: min(440px, calc(100vh - 190px));
+  .board { display: grid; grid-template-columns: repeat(8, 1fr); grid-template-rows: repeat(8, 1fr); width: 100%; max-width: min(440px, calc(100vh - 190px));
            min-width: 220px; margin: 0 auto;
            aspect-ratio: 1; border-radius: 12px; overflow: hidden; border: 1px solid var(--line); user-select: none; }
-  .sq { position: relative; display: grid; place-items: center; font-size: min(9vw, 40px, calc((100vh - 190px) / 9)); line-height: 1; cursor: pointer; }
+  .sq { position: relative; min-height: 0; aspect-ratio: 1; display: grid; place-items: center; font-size: min(9vw, 40px, calc((100vh - 190px) / 9)); line-height: 1; cursor: pointer; }
   .sq.l { background: var(--sq-light); } .sq.d { background: var(--sq-dark); }
   .sq.last { box-shadow: inset 0 0 0 100px rgba(61,139,255,.22); }
   .sq.sel { box-shadow: inset 0 0 0 100px rgba(255,0,0,.35); }
@@ -124,6 +124,12 @@ const T = {
   chessSub: L3("Сыграйте со студентами вуза", "Play with students of the university", "Jouez avec les étudiants"),
   search: L3("🔍 Найти соперника", "🔍 Find an opponent", "🔍 Trouver un adversaire"),
   invite: L3("🤝 Пригласить друга", "🤝 Invite a friend", "🤝 Inviter un ami"),
+  vsBot: L3("🤖 Сыграть с ботом", "🤖 Play the bot", "🤖 Jouer contre le bot"),
+  levels: [L3("🐣 Новичок", "🐣 Beginner", "🐣 Débutant"), L3("🙂 Средний", "🙂 Intermediate", "🙂 Intermédiaire"),
+           L3("🔥 Сильный", "🔥 Strong", "🔥 Fort")],
+  botNote: L3("Тренировка: партии с ботом не идут в рейтинг и статистику", "Practice: games with the bot don't count towards rating or stats",
+              "Entraînement : les parties contre le bot ne comptent ni pour le classement ni pour les statistiques"),
+  botThinks: L3("Бот думает…", "The bot is thinking…", "Le bot réfléchit…"),
   rating: L3("Рейтинг", "Rating", "Classement"), wins: L3("побед", "wins", "victoires"),
   losses: L3("поражений", "losses", "défaites"), draws: L3("ничьих", "draws", "nuls"),
   my: L3("Мои партии", "My games", "Mes parties"), top: L3("Рейтинг вуза", "University ranking", "Classement de l'université"),
@@ -225,7 +231,10 @@ function lobbyHTML() {
     <div class="card"><div class="hero"><div class="ico">♟️</div><div><b>${T.chess}</b><span class="muted">${T.chessSub}</span></div></div>
       <div class="stat"><div><b>${me.rating}</b><small>${T.rating}</small></div><div><b>${me.wins}</b><small>${T.wins}</small></div>
         <div><b>${me.losses}</b><small>${T.losses}</small></div><div><b>${me.draws}</b><small>${T.draws}</small></div></div>
-      <button class="btn red" id="b-search">${T.search}</button><button class="btn" id="b-invite">${T.invite}</button></div>
+      <button class="btn red" id="b-search">${T.search}</button><button class="btn" id="b-invite">${T.invite}</button>
+      <button class="btn" id="b-bot">${T.vsBot}</button>
+      ${state.pickLevel ? `<div class="row">${T.levels.map((t, i) => `<button class="btn small" data-level="${i + 1}">${t}</button>`).join("")}</div>
+        <div class="muted" style="margin-top:8px">${T.botNote}</div>` : ""}</div>
     ${games ? `<div class="card"><h2>${T.my}</h2><div class="list">${games}</div></div>` : ""}
     <div class="card"><h2>${T.top}<span>${L3("победы–поражения–ничьи", "W–L–D", "V–D–N")}</span></h2>
       ${top ? `<div class="list">${top}</div>` : `<div class="muted">${T.topEmpty}</div>`}</div>`;
@@ -264,6 +273,8 @@ function boardHTML(g) {
 }
 function playerBar(p, color, turn) {
   if (!p) return `<div class="player"><div class="av">?</div><div class="who"><b>…</b></div></div>`;
+  if (p.bot) return `<div class="player${turn ? " turn" : ""}"><div class="av ${color === "white" ? "w" : "b"}">🤖</div>
+    <div class="who"><b>${esc(p.name)}</b><small>${esc(T.botNote.split(":")[0])}</small></div></div>`;
   return `<div class="player${turn ? " turn" : ""}"><div class="av ${color === "white" ? "w" : "b"}">${esc((p.name || "?")[0])}</div>
     <div class="who">${playerLine(p)}</div><div class="rt">${p.rating}</div></div>`;
 }
@@ -292,12 +303,14 @@ function gameHTML() {
     const reason = T.reasons[g.reason] || g.reason;
     if (g.result === "1/2-1/2") status = `${T.draw} · ${reason}`;
     else { status = `${won ? T.win : T.lose} · ${reason}`; cls = won ? "win" : "lose"; }
-  } else status = (g.your_turn ? T.yourTurn : T.theirTurn) + (g.check ? " · " + T.check : "");
+  } else status = (state.thinking ? T.botThinks : g.your_turn ? T.yourTurn : T.theirTurn) + (g.check && !state.thinking ? " · " + T.check : "");
+  const bot = g.kind === "bot";
   const draw = g.status === "play" && g.you ? (g.draw_offer === "them"
     ? `<div class="card" style="text-align:center"><b>${T.drawAsk}</b><div class="row"><button class="btn small red" id="b-acc">${T.accept}</button>
         <button class="btn small" id="b-dec">${T.decline}</button></div></div>` : "") : "";
-  const actions = g.status === "play" && g.you ? `<div class="row"><button class="btn small" id="b-draw"${g.draw_offer === "you" ? " disabled" : ""}>
-      ${g.draw_offer === "you" ? T.drawSent : T.offerDraw}</button><button class="btn small" id="b-resign">${T.resign}</button></div>` : "";
+  const actions = (g.status === "play" && g.you ? `<div class="row">${bot ? "" : `<button class="btn small" id="b-draw"${g.draw_offer === "you" ? " disabled" : ""}>
+      ${g.draw_offer === "you" ? T.drawSent : T.offerDraw}</button>`}<button class="btn small" id="b-resign">${T.resign}</button></div>` : "")
+    + (bot && g.status === "over" ? `<div class="muted" style="text-align:center;margin-top:6px">${T.botNote}</div>` : "");
   return backBtn + draw + `<div class="card" style="padding:12px">
     ${playerBar(g[opp], opp, g.status === "play" && g.turn === opp)}
     ${boardHTML(g)}
@@ -308,14 +321,18 @@ function gameHTML() {
 }
 
 async function act(body) {
+  // с ботом его ответ приходит в том же запросе — пока он думает, так и пишем
+  state.thinking = state.game.kind === "bot" && body.action === "move";
+  if (state.thinking) render();
   try {
     state.game = await api("/api/act", { id: state.game.id, ...body });
-    render();
   } catch (e) { showErr(e.message); }
+  state.thinking = false;
+  render();
 }
 function onSquare(sq) {
   const g = state.game;
-  if (!g || !g.your_turn) return;
+  if (!g || !g.your_turn || state.thinking) return;
   if (state.sel) {
     const opts = g.legal.filter(m => m.startsWith(state.sel + sq));
     if (opts.length > 1) { state.promo = state.sel + sq; render(); document.getElementById("promo").classList.add("on"); return; }
@@ -356,11 +373,13 @@ function render() {
   app.innerHTML = lobbyHTML();
   document.getElementById("b-search").onclick = () => start("search");
   document.getElementById("b-invite").onclick = () => start("invite");
+  document.getElementById("b-bot").onclick = () => { state.pickLevel = !state.pickLevel; render(); };
+  document.querySelectorAll("[data-level]").forEach(b => b.onclick = () => { state.pickLevel = false; start("bot", +b.dataset.level); });
   document.querySelectorAll("[data-g]").forEach(el => el.onclick = () => openGame(el.dataset.g));
 }
-async function start(kind) {
+async function start(kind, level) {
   try {
-    state.game = await api("/api/new", { kind }); state.view = "game"; state.sel = null; render();
+    state.game = await api("/api/new", { kind, level }); state.view = "game"; state.sel = null; render();
     if (kind === "invite") share(state.game.id);
     haptic("light"); poll(2000);
   } catch (e) { showErr(e.message); }

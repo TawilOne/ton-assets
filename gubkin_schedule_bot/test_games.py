@@ -145,3 +145,58 @@ def test_http_api(store):
         finally:
             await client.close()
     asyncio.run(go())
+
+
+def test_bot_games_never_touch_rating_or_stats(store, monkeypatch):
+    """Партия с ботом: бот отвечает сам, белыми ходит первым; итог не идёт ни в рейтинг, ни в статистику."""
+    monkeypatch.setattr(games, "stockfish_path", lambda: None)  # без Stockfish — встроенный движок
+    engine = games.Engine()
+    for _ in range(6):  # цвет случайный — несколько партий, чтобы попались оба
+        gid = store.create(1, "bot", 2)
+        asyncio.run(games.bot_reply(store, engine, gid))
+        v = store.view(1, gid)
+        assert v["status"] == "play" and v["your_turn"]  # бот белыми уже сходил, иначе ход наш
+        bot_side = v["black"] if v["you"] == "white" else v["white"]
+        assert bot_side["bot"] and bot_side["rating"] is None and "Средний" in bot_side["name"]
+        assert len(v["moves"]) == (1 if v["you"] == "black" else 0)
+        store.move(1, gid, v["legal"][0])
+        asyncio.run(games.bot_reply(store, engine, gid))
+        v = store.view(1, gid)
+        assert v["your_turn"] and len(v["moves"]) == (3 if v["you"] == "black" else 2)  # бот ответил
+        with pytest.raises(games.GameError):
+            store.draw(1, gid, "offer")  # на ничью бот не соглашается
+        store.resign(1, gid)
+        assert store.view(1, gid)["status"] == "over"
+    me = store.player(1)
+    assert (me["rating"], me["wins"], me["losses"], me["draws"]) == (1200, 0, 0, 0)
+    assert store.top() == []  # в рейтинг вуза не попал
+    with pytest.raises(games.GameError):
+        store.create(1, "bot", 9)
+
+
+def test_simple_engine_takes_mate_and_free_queen():
+    import chess
+    games.random.seed(1)
+    mate = chess.Board("6k1/5ppp/8/8/8/8/5PPP/3R2K1 w - - 0 1")  # Rd8#
+    assert games.simple_move(mate, 3).uci() == "d1d8"
+    queen = chess.Board("4k3/8/8/3q4/8/8/8/3RK3 w - - 0 1")  # ладья берёт незащищённого ферзя
+    assert games.simple_move(queen, 3).uci() == "d1d5"
+
+
+def test_http_bot_game(store, monkeypatch):
+    monkeypatch.setattr(games, "stockfish_path", lambda: None)
+
+    async def go():
+        client = TestClient(TestServer(games.make_app(store, TOKEN)))
+        await client.start_server()
+        try:
+            h = {"X-Init-Data": init_data(1)}
+            v = await (await client.post("/api/new", json={"kind": "bot", "level": 1}, headers=h)).json()
+            assert v["kind"] == "bot" and v["your_turn"]
+            n = len(v["moves"])
+            v = await (await client.post("/api/act", json={"id": v["id"], "action": "move", "uci": v["legal"][0]},
+                                         headers=h)).json()
+            assert len(v["moves"]) == n + 2 and v["your_turn"]  # наш ход и сразу ответ бота
+        finally:
+            await client.close()
+    asyncio.run(go())
