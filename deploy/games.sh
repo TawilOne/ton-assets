@@ -32,7 +32,7 @@ systemctl restart caddy
 
 echo "Проверяю (первый сертификат может получаться до минуты)..."
 for i in $(seq 1 12); do
-  if curl -fsS --max-time 10 "https://$HOST/api/ping" | grep -q '"ok"'; then
+  if curl -fs --max-time 10 "https://$HOST/api/ping" 2>/dev/null | grep -q '"ok"'; then
     echo "✅ Игры работают: https://$HOST"
     exit 0
   fi
