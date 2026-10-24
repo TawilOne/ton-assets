@@ -42,7 +42,6 @@ ABANDON = 3 * 60           # вышел из партии (закрыл мини
 CANCEL_RACE = 15           # соперник подсел за секунды до «Отменить» — отмена всё равно срабатывает
 GRACE = 20                 # мини-приложение спрашивает сервер каждые 2–8 с; тишина дольше — человека нет на месте
 WAIT_MAX = 86400           # приглашение и поиск соперника живут сутки
-NOTIFY_EVERY = 30 * 60     # «кто-то ищет игру» — одному человеку не чаще раза в полчаса
 NOTIFY_QUIET = (23, 7)     # ночью (по Москве) не будим
 MSK = ZoneInfo("Europe/Moscow")
 START_RATING, K = 1200, 32
@@ -129,8 +128,7 @@ class Store:
         for table, column in (("games", "level INTEGER DEFAULT 0"),  # уровень бота
                               ("players", "photo TEXT DEFAULT ''"),  # аватарка из Telegram (photo_url)
                               ("games", "seen_w REAL DEFAULT 0"), ("games", "seen_b REAL DEFAULT 0"),  # кто когда был в партии
-                              ("players", "notify INTEGER DEFAULT 0"),  # хочет знать, когда кто-то ищет игру
-                              ("players", "notified REAL DEFAULT 0")):
+                              ("players", "notify INTEGER DEFAULT 0")):  # хочет знать, когда кто-то ищет игру
             try:  # у старой базы колонки ещё нет
                 self.db.execute(f"ALTER TABLE {table} ADD COLUMN {column}")
             except sqlite3.OperationalError:
@@ -181,16 +179,15 @@ class Store:
 
     def _announce_search(self, uid: int, gid: str) -> None:
         """Новый открытый поиск — в очередь тем, кто включил уведомления. Не пишем: самому ищущему,
-        тем, кто сейчас в мини-приложении (они и так видят), чаще раза в полчаса и ночью."""
+        тем, кто сейчас в мини-приложении (они и так видят), и ночью."""
         now = time.time()
         hour = datetime.fromtimestamp(now, MSK).hour
         if hour >= NOTIFY_QUIET[0] or hour < NOTIFY_QUIET[1]:
             return
-        rows = self.db.execute("SELECT id FROM players WHERE notify = 1 AND id != ? AND (seen IS NULL OR seen < ?) "
-                               "AND (notified IS NULL OR notified < ?)", (uid, now - GRACE, now - NOTIFY_EVERY)).fetchall()
+        rows = self.db.execute("SELECT id FROM players WHERE notify = 1 AND id != ? AND (seen IS NULL OR seen < ?)",
+                               (uid, now - GRACE)).fetchall()
         for r in rows:
             self.db.execute("INSERT INTO outbox (gid, uid, created) VALUES (?, ?, ?)", (gid, r["id"], now))
-            self.db.execute("UPDATE players SET notified = ? WHERE id = ?", (now, r["id"]))
         self.db.commit()
 
     def take_outbox(self) -> list[dict]:

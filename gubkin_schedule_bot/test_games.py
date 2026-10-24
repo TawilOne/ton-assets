@@ -331,7 +331,7 @@ def _daytime(monkeypatch, hour=13):
 
 def test_notify_when_someone_searches(store, monkeypatch):
     """Включил «🔔 Сообщать, когда кто-то ищет игру» — бот напишет, когда кто-то начнёт поиск.
-    Не пишем: самому ищущему, тем, кто сейчас в мини-приложении, чаще раза в полчаса, ночью, без галочки."""
+    Не пишем: самому ищущему, тем, кто сейчас в мини-приложении, ночью, без галочки."""
     now = _daytime(monkeypatch)
     for uid in (1, 2, 3):
         store.touch({"id": uid, "first_name": "И"})
@@ -349,16 +349,16 @@ def test_notify_when_someone_searches(store, monkeypatch):
     store.cancel(1, gid)
     now[0] += 60
     store.create(1, "search")
-    # Марии уже писали меньше получаса назад; Олег теперь вне приложения — ему пишем
-    assert [n["uid"] for n in store.take_outbox()] == [3]
+    # ограничения по частоте нет — Марии снова пишем; Олег теперь вне приложения — и ему
+    assert sorted(n["uid"] for n in store.take_outbox()) == [2, 3]
     store.set_notify(3, False)
 
-    now[0] += 31 * 60
+    now[0] += 60
     gid = store.create(1, "search")
     store.cancel(1, gid)  # успел отменить, пока бот не отправил — не шлём
     assert store.take_outbox() == []
 
-    now[0] += 31 * 60
+    now[0] += 60
     store.set_notify(2, False)
     gid = store.create(1, "search")
     assert store.take_outbox() == []  # выключила
