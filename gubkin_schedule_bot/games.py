@@ -43,6 +43,7 @@ CANCEL_RACE = 15           # соперник подсел за секунды �
 GRACE = 20                 # мини-приложение спрашивает сервер каждые 2–8 с; тишина дольше — человека нет на месте
 WAIT_MAX = 86400           # приглашение и поиск соперника живут сутки
 NOTIFY_QUIET = (23, 7)     # ночью (по Москве) не будим
+NOTIFY_SAME = 10 * 60      # про одного и того же ищущего — не чаще раза в 10 минут (жмёт «Найти»/«Отменить» по кругу)
 MSK = ZoneInfo("Europe/Moscow")
 START_RATING, K = 1200, 32
 BOT = 0  # «игрок» бот: id 0 в партии; партии с ботом не трогают ни рейтинг, ни статистику
@@ -124,6 +125,7 @@ class Store:
                 reason TEXT DEFAULT '', draw_offer INTEGER DEFAULT 0, created REAL, updated REAL);
             CREATE INDEX IF NOT EXISTS games_status ON games(status, kind);
             CREATE TABLE IF NOT EXISTS outbox (gid TEXT, uid INTEGER, created REAL);  -- уведомления для бота
+            CREATE TABLE IF NOT EXISTS notified (uid INTEGER, searcher INTEGER, at REAL, PRIMARY KEY (uid, searcher));
         """)
         for table, column in (("games", "level INTEGER DEFAULT 0"),  # уровень бота
                               ("players", "photo TEXT DEFAULT ''"),  # аватарка из Telegram (photo_url)
@@ -179,15 +181,18 @@ class Store:
 
     def _announce_search(self, uid: int, gid: str) -> None:
         """Новый открытый поиск — в очередь тем, кто включил уведомления. Не пишем: самому ищущему,
-        тем, кто сейчас в мини-приложении (они и так видят), и ночью."""
+        тем, кто сейчас в мини-приложении (они и так видят), ночью и повторно про того же человека в течение 10 минут."""
         now = time.time()
         hour = datetime.fromtimestamp(now, MSK).hour
         if hour >= NOTIFY_QUIET[0] or hour < NOTIFY_QUIET[1]:
             return
-        rows = self.db.execute("SELECT id FROM players WHERE notify = 1 AND id != ? AND (seen IS NULL OR seen < ?)",
-                               (uid, now - GRACE)).fetchall()
+        self.db.execute("DELETE FROM notified WHERE at < ?", (now - NOTIFY_SAME,))
+        rows = self.db.execute("SELECT id FROM players WHERE notify = 1 AND id != ? AND (seen IS NULL OR seen < ?) "
+                               "AND id NOT IN (SELECT uid FROM notified WHERE searcher = ?)",
+                               (uid, now - GRACE, uid)).fetchall()
         for r in rows:
             self.db.execute("INSERT INTO outbox (gid, uid, created) VALUES (?, ?, ?)", (gid, r["id"], now))
+            self.db.execute("INSERT OR REPLACE INTO notified (uid, searcher, at) VALUES (?, ?, ?)", (r["id"], uid, now))
         self.db.commit()
 
     def take_outbox(self) -> list[dict]:
