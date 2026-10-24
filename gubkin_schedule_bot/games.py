@@ -36,6 +36,7 @@ DB_FILE = HERE / "games.db"
 ORIGINS = {"https://tawilone.github.io", *filter(None, os.environ.get("GAMES_ORIGINS", "").split())}
 AUTH_MAX_AGE = 2 * 86400   # подпись Telegram действует двое суток с открытия мини-приложения
 INACTIVE = 3 * 86400       # три дня без хода — тот, чей ход, проигрывает по времени
+ABANDON = 3 * 60           # вышел из партии (закрыл мини-приложение/Telegram) и не вернулся за 3 минуты — поражение
 WAIT_MAX = 86400           # приглашение и поиск соперника живут сутки
 START_RATING, K = 1200, 32
 BOT = 0  # «игрок» бот: id 0 в партии; партии с ботом не трогают ни рейтинг, ни статистику
@@ -118,7 +119,8 @@ class Store:
             CREATE INDEX IF NOT EXISTS games_status ON games(status, kind);
         """)
         for table, column in (("games", "level INTEGER DEFAULT 0"),  # уровень бота
-                              ("players", "photo TEXT DEFAULT ''")):  # аватарка из Telegram (photo_url)
+                              ("players", "photo TEXT DEFAULT ''"),  # аватарка из Telegram (photo_url)
+                              ("games", "seen_w REAL DEFAULT 0"), ("games", "seen_b REAL DEFAULT 0")):  # кто когда был в партии
             try:  # у старой базы колонки ещё нет
                 self.db.execute(f"ALTER TABLE {table} ADD COLUMN {column}")
             except sqlite3.OperationalError:
@@ -170,6 +172,16 @@ class Store:
             board = self._board(g)
             loser_white = board.turn == chess.WHITE
             self._finish(g, "0-1" if loser_white else "1-0", "time")
+            return self.db.execute("SELECT * FROM games WHERE id = ?", (g["id"],)).fetchone()
+        if g["status"] == "play" and g["kind"] != "bot":
+            # один вышел из партии и не возвращается, а второй на месте — вышедший проиграл
+            away_w, away_b = now - (g["seen_w"] or g["updated"]), now - (g["seen_b"] or g["updated"])
+            if away_w > ABANDON and away_b <= ABANDON:
+                self._finish(g, "0-1", "abandon")
+            elif away_b > ABANDON and away_w <= ABANDON:
+                self._finish(g, "1-0", "abandon")
+            else:
+                return g
             return self.db.execute("SELECT * FROM games WHERE id = ?", (g["id"],)).fetchone()
         return g
 
@@ -223,8 +235,9 @@ class Store:
         if g["creator"] == uid:
             return gid  # своё приглашение — ждём друга
         white, black = (uid, g["creator"]) if random.random() < 0.5 else (g["creator"], uid)
-        self.db.execute("UPDATE games SET white = ?, black = ?, status = 'play', updated = ? WHERE id = ?",
-                        (white, black, time.time(), gid))
+        now = time.time()
+        self.db.execute("UPDATE games SET white = ?, black = ?, status = 'play', updated = ?, seen_w = ?, seen_b = ? "
+                        "WHERE id = ?", (white, black, now, now, now, gid))
         self.db.commit()
         return gid
 
@@ -314,6 +327,13 @@ class Store:
             self.db.execute(f"UPDATE players SET rating = rating - ?, {col[1]} = {col[1]} + 1 WHERE id = ?", (dw, b["id"]))
         self.db.commit()
 
+    def here(self, uid: int, gid: str) -> None:
+        """Игрок сейчас в партии (страница партии открыта и спрашивает сервер)."""
+        self.db.execute("UPDATE games SET seen_w = CASE WHEN white = ? THEN ? ELSE seen_w END, "
+                        "seen_b = CASE WHEN black = ? THEN ? ELSE seen_b END WHERE id = ? AND status = 'play'",
+                        (uid, time.time(), uid, time.time(), gid))
+        self.db.commit()
+
     def view(self, uid: int, gid: str) -> dict:
         g = self._get(gid)
         board = self._board(g)
@@ -329,7 +349,17 @@ class Store:
             "white": self._side(g, "white"), "black": self._side(g, "black"), "level": g["level"] or 0,
             "creator": self.player(g["creator"]) if g["status"] == "wait" else None,
             "draw_offer": "you" if g["draw_offer"] == uid else "them" if g["draw_offer"] else "",
+            # сколько секунд соперника нет в партии (вышел из мини-приложения) и через сколько ему засчитают поражение
+            "opp_away": self._away(g, "black" if you == "white" else "white") if you and g["kind"] != "bot" else 0,
+            "abandon": ABANDON,
         }
+
+    @staticmethod
+    def _away(g, color: str) -> int:
+        if g["status"] != "play":
+            return 0
+        seen = g["seen_w" if color == "white" else "seen_b"] or g["updated"]
+        return max(0, int(time.time() - seen))
 
     def _side(self, g, color: str) -> dict | None:
         if g["kind"] == "bot" and g[color] == BOT:
@@ -498,12 +528,15 @@ def make_app(store: Store, token: str, engine: Engine | None = None) -> web.Appl
         return web.json_response(store.view(uid, gid))
 
     async def game(request):
-        return web.json_response(store.view(who(request), request.query.get("id", "")))
+        uid, gid = who(request), request.query.get("id", "")
+        store.here(uid, gid)
+        return web.json_response(store.view(uid, gid))
 
     async def act(request):
         uid = who(request)
         d = await body(request)
         gid, action = str(d.get("id", "")), d.get("action")
+        store.here(uid, gid)
         if action == "join":
             gid = store.join(uid, gid)
         elif action == "cancel":

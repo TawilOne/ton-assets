@@ -210,3 +210,36 @@ def test_avatar_from_telegram(store):
     assert store.player(2)["photo"] == ""
     store.touch({"id": 1, "first_name": "Иван"})  # убрал фото в Telegram — пропадёт и у нас
     assert store.player(1)["photo"] == ""
+
+
+def test_leaving_the_game_loses_after_3_minutes(store, monkeypatch):
+    """Вышел из мини-приложения и не вернулся за 3 минуты, а соперник на месте — поражение.
+    Вышли оба — никто не проигрывает (действует прежнее правило 3 дней). С ботом — не считается."""
+    now = [1_000_000.0]
+    monkeypatch.setattr(games.time, "time", lambda: now[0])
+    gid = store.create(1, "invite")
+    store.join(2, gid)
+    v = store.view(1, gid)
+    stayer, leaver = (1, 2)
+    now[0] += 60
+    store.here(stayer, gid)
+    assert store.view(stayer, gid)["opp_away"] == 60  # соперника нет минуту — показываем отсчёт
+    now[0] += 100
+    store.here(stayer, gid)
+    assert store.view(stayer, gid)["status"] == "play"  # 2:40 — ещё ждём
+    now[0] += 30
+    store.here(stayer, gid)
+    v = store.view(stayer, gid)  # 3:10 — ушедший проиграл
+    assert v["status"] == "over" and v["reason"] == "abandon"
+    leaver_color = "white" if v["white"]["id"] == leaver else "black"
+    assert v["result"] == ("0-1" if leaver_color == "white" else "1-0")
+    assert store.player(leaver)["losses"] == 1 and store.player(stayer)["wins"] == 1
+
+    gid = store.create(1, "invite")  # вышли оба — никому не засчитываем
+    store.join(3, gid)
+    now[0] += 10 * 60
+    assert store.view(1, gid)["status"] == "play"
+
+    gid = store.create(1, "bot", 1)  # с ботом уход ничего не решает
+    now[0] += 10 * 60
+    assert store.view(1, gid)["status"] == "play"

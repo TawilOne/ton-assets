@@ -113,6 +113,8 @@
          border-radius: 14px; background: #3a1214; border: 1px solid rgba(255,0,0,.4); display: none; z-index: 9; }
   .err.on { display: block; }
   .wait { text-align: center; padding: 10px 0; }
+  .away { text-align: center; padding: 12px 14px; border-color: rgba(255,194,77,.35); background: rgba(255,194,77,.08);
+          color: #ffd27a; font-weight: 600; font-size: 14px; }
   .wait .big { font-size: 44px; animation: bob 1.4s ease-in-out infinite; }
   @keyframes bob { 50% { transform: translateY(-6px); } }
 </style>
@@ -153,6 +155,12 @@ const T = {
   botNote: L3("Тренировка: партии с ботом не идут в рейтинг и статистику", "Practice: games with the bot don't count towards rating or stats",
               "Entraînement : les parties contre le bot ne comptent ni pour le classement ni pour les statistiques"),
   botThinks: L3("Бот думает…", "The bot is thinking…", "Le bot réfléchit…"),
+  oppAway: t => L3(`⏳ Соперник вышел из игры. Если не вернётся за ${t} — победа ваша`,
+                   `⏳ Your opponent left. If they don't return within ${t}, you win`,
+                   `⏳ L'adversaire est parti. S'il ne revient pas d'ici ${t}, vous gagnez`),
+  leaveRule: L3("Если выйти из партии больше чем на 3 минуты — засчитается поражение",
+                "Leaving the game for more than 3 minutes counts as a loss",
+                "Quitter la partie plus de 3 minutes compte comme une défaite"),
   rating: L3("Рейтинг", "Rating", "Classement"), wins: L3("побед", "wins", "victoires"),
   losses: L3("поражений", "losses", "défaites"), draws: L3("ничьих", "draws", "nuls"),
   my: L3("Мои партии", "My games", "Mes parties"), top: L3("Рейтинг вуза", "University ranking", "Classement de l'université"),
@@ -179,6 +187,7 @@ const T = {
   reasons: { checkmate: L3("мат", "checkmate", "échec et mat"), resign: L3("сдача", "resignation", "abandon"),
              time: L3("3 дня без хода", "no move for 3 days", "3 jours sans coup"), stalemate: L3("пат", "stalemate", "pat"),
              agreement: L3("по согласию", "by agreement", "d'un commun accord"),
+             abandon: L3("игрок вышел из партии", "a player left the game", "un joueur a quitté la partie"),
              insufficient_material: L3("мало фигур", "insufficient material", "matériel insuffisant"),
              threefold_repetition: L3("троекратное повторение", "threefold repetition", "triple répétition"),
              fivefold_repetition: L3("пятикратное повторение", "fivefold repetition", "quintuple répétition"),
@@ -391,7 +400,7 @@ function waitHTML(g) {
 // каркас партии строится один раз — дальше меняются только части, а фигуры живут и ездят
 function skeleton(g) {
   shown = null; pieceEls = {};
-  return backBtn() + `<div id="drawask"></div><div class="card" style="padding:12px">
+  return backBtn() + `<div id="drawask"></div><div id="away"></div><div class="card" style="padding:12px">
     <div id="bar-top"></div>
     <div class="board" id="board"><div class="squares" id="squares"></div><div class="pieces" id="pieces"></div></div>
     <div id="bar-bottom"></div>
@@ -420,7 +429,12 @@ function update(animateFrom) {
   $("status").className = "status " + cls; $("status").textContent = status;
   $("drawask").innerHTML = g.status === "play" && g.you && g.draw_offer === "them" ? `<div class="card" style="text-align:center"><b>${T.drawAsk}</b>
     <div class="row"><button class="btn small red" id="b-acc">${T.accept}</button><button class="btn small" id="b-dec">${T.decline}</button></div></div>` : "";
-  $("actions").innerHTML = (g.status === "play" && g.you ? `<div class="row">${bot ? "" : `<button class="btn small" id="b-draw"${g.draw_offer === "you" ? " disabled" : ""}>
+  // соперник закрыл мини-приложение — показываем, через сколько ему засчитают поражение
+  const left = g.abandon - g.opp_away, mmss = `${Math.floor(Math.max(0, left) / 60)}:${String(Math.max(0, left) % 60).padStart(2, "0")}`;
+  $("away").innerHTML = g.status === "play" && !bot && g.opp_away >= 20
+    ? `<div class="card away">${esc(T.oppAway(mmss))}</div>` : "";
+  $("actions").innerHTML = (g.status === "play" && g.you && !bot ? `<div class="muted" style="text-align:center;margin:-4px 0 8px;font-size:12px">${T.leaveRule}</div>` : "")
+    + (g.status === "play" && g.you ? `<div class="row">${bot ? "" : `<button class="btn small" id="b-draw"${g.draw_offer === "you" ? " disabled" : ""}>
       ${g.draw_offer === "you" ? T.drawSent : T.offerDraw}</button>`}<button class="btn small" id="b-resign">${T.resign}</button></div>` : "")
     + (bot && g.status === "over" ? `<div class="muted" style="text-align:center;margin-top:6px">${T.botNote}</div>` : "");
   if ($("b-resign")) $("b-resign").onclick = () => {
@@ -554,6 +568,7 @@ async function openGame(id, join) {
   } catch (e) { showErr(e.message); state.view = "lobby"; render(); tick(); }
 }
 
+document.addEventListener("visibilitychange", () => { if (!document.hidden) poll(0); });
 render();
 if (tg && tg.initData) {
   if (params.get("g")) openGame(params.get("g"), true);  // пришли по ссылке-приглашению
