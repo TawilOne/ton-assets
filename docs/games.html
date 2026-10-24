@@ -113,6 +113,12 @@
          border-radius: 14px; background: #3a1214; border: 1px solid rgba(255,0,0,.4); display: none; z-index: 9; }
   .err.on { display: block; }
   .wait { text-align: center; padding: 10px 0; }
+  .seeking { text-align: center; font-size: 13px; color: var(--muted); margin: 12px 0 -2px; }
+  .seeking.on { color: var(--text); }
+  .seeking b { font-weight: 700; }
+  .seeking i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--green); margin-right: 7px;
+               vertical-align: 1px; animation: blink 1.6s ease-in-out infinite; }
+  @keyframes blink { 50% { opacity: .3; } }
   .away { text-align: center; padding: 12px 14px; border-color: rgba(255,194,77,.35); background: rgba(255,194,77,.08);
           color: #ffd27a; font-weight: 600; font-size: 14px; }
   .wait .big { font-size: 44px; animation: bob 1.4s ease-in-out infinite; }
@@ -148,6 +154,10 @@ const T = {
   chess: L3("Шахматы", "Chess", "Échecs"),
   chessSub: L3("Сыграйте со студентами вуза", "Play with students of the university", "Jouez avec les étudiants"),
   search: L3("🔍 Найти соперника", "🔍 Find an opponent", "🔍 Trouver un adversaire"),
+  seeking: n => n ? L3(`<i></i>Сейчас ищут игру: <b>${n}</b>`, `<i></i>Looking for a game now: <b>${n}</b>`,
+                      `<i></i>Cherchent une partie : <b>${n}</b>`)
+                 : L3("Сейчас никто не ищет игру — начните первым", "Nobody is looking for a game right now — be the first",
+                      "Personne ne cherche de partie — soyez le premier"),
   invite: L3("🤝 Пригласить друга", "🤝 Invite a friend", "🤝 Inviter un ami"),
   vsBot: L3("🤖 Сыграть с ботом", "🤖 Play the bot", "🤖 Jouer contre le bot"),
   levels: [L3("🐣 Новичок", "🐣 Beginner", "🐣 Débutant"), L3("🙂 Средний", "🙂 Intermediate", "🙂 Intermédiaire"),
@@ -253,7 +263,7 @@ async function tick() {
 }
 async function loadLobby() {
   const [me, top] = await Promise.all([api("/api/me"), api("/api/top")]);
-  state.me = me.me; state.games = me.games; state.top = top.top;
+  state.me = me.me; state.games = me.games; state.top = top.top; state.searching = me.searching || 0;
   if (state.view === "lobby") render();
 }
 
@@ -276,6 +286,7 @@ function lobbyHTML() {
     <div class="card"><div class="hero"><div class="ico">♟️</div><div><b>${T.chess}</b><span class="muted">${T.chessSub}</span></div></div>
       <div class="stat"><div><b>${me.rating}</b><small>${T.rating}</small></div><div><b>${me.wins}</b><small>${T.wins}</small></div>
         <div><b>${me.losses}</b><small>${T.losses}</small></div><div><b>${me.draws}</b><small>${T.draws}</small></div></div>
+      <div class="seeking${state.searching ? " on" : ""}">${T.seeking(state.searching)}</div>
       <button class="btn red" id="b-search">${T.search}</button><button class="btn" id="b-invite">${T.invite}</button>
       <button class="btn" id="b-bot">${T.vsBot}</button>
       ${state.pickLevel ? `<div class="row">${T.levels.map((t, i) => `<button class="btn small" data-level="${i + 1}">${t}</button>`).join("")}</div>

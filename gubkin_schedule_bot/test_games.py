@@ -263,8 +263,10 @@ def test_search_skips_players_who_left(store, monkeypatch):
     store.touch({"id": 2, "first_name": "Мария"})
     new = store.create(2, "search")
     assert new != old and store.view(2, new)["status"] == "wait"
+    assert store.searching(3) == 1 and store.searching(2) == 0  # Иван ушёл — его не считаем, себя тоже
     store.touch({"id": 3, "first_name": "Олег"})
     assert store.create(3, "search") == new  # Мария ищет прямо сейчас — к ней и садимся
+    assert store.searching(3) == 0
 
 
 def test_cancel_right_after_opponent_joined(store, monkeypatch):

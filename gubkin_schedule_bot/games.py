@@ -155,6 +155,12 @@ class Store:
                                "ORDER BY rating DESC, wins DESC LIMIT ?", (limit,)).fetchall()
         return [self.player(r["id"]) for r in rows]
 
+    def searching(self, uid: int) -> int:
+        """Сколько человек прямо сейчас ищут соперника (кроме самого uid)."""
+        return self.db.execute("SELECT COUNT(DISTINCT g.creator) FROM games g JOIN players p ON p.id = g.creator "
+                               "WHERE g.status = 'wait' AND g.kind = 'search' AND g.creator != ? AND p.seen > ?",
+                               (uid, time.time() - GRACE)).fetchone()[0]
+
     # ---- партии
 
     def _get(self, gid: str) -> sqlite3.Row:
@@ -536,7 +542,8 @@ def make_app(store: Store, token: str, engine: Engine | None = None) -> web.Appl
 
     async def me(request):
         uid = who(request)
-        return web.json_response({"me": store.player(uid), "games": store.my_games(uid, here=True)})
+        return web.json_response({"me": store.player(uid), "games": store.my_games(uid, here=True),
+                                  "searching": store.searching(uid)})
 
     async def top(request):
         who(request)
