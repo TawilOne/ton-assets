@@ -214,32 +214,54 @@ def test_avatar_from_telegram(store):
 
 def test_leaving_the_game_loses_after_3_minutes(store, monkeypatch):
     """Вышел из мини-приложения и не вернулся за 3 минуты, а соперник на месте — поражение.
-    Вышли оба — никто не проигрывает (действует прежнее правило 3 дней). С ботом — не считается."""
-    now = [1_000_000.0]
+    Время, когда на месте нет никого, не считается. С ботом — не считается."""
+    now = [time.time()]
     monkeypatch.setattr(games.time, "time", lambda: now[0])
+
+    def wait(uid, gid, sec, lobby=False):  # uid сидит в мини-приложении sec секунд (опрос раз в 2 с)
+        for _ in range(int(sec // 2)):
+            now[0] += 2
+            store.my_games(uid, here=True) if lobby else store.here(uid, gid)
+
     gid = store.create(1, "invite")
     store.join(2, gid)
-    v = store.view(1, gid)
-    stayer, leaver = (1, 2)
-    now[0] += 60
-    store.here(stayer, gid)
-    assert store.view(stayer, gid)["opp_away"] == 60  # соперника нет минуту — показываем отсчёт
-    now[0] += 100
-    store.here(stayer, gid)
-    assert store.view(stayer, gid)["status"] == "play"  # 2:40 — ещё ждём
-    now[0] += 30
-    store.here(stayer, gid)
-    v = store.view(stayer, gid)  # 3:10 — ушедший проиграл
+    wait(1, gid, 60)
+    assert store.view(1, gid)["opp_away"] == 60  # соперника нет минуту — показываем отсчёт
+    wait(1, gid, 100, lobby=True)  # список игр — тоже «на месте»
+    assert store.view(1, gid)["status"] == "play"  # 2:40 — ещё ждём
+    wait(1, gid, 30)
+    v = store.view(1, gid)  # 3:10 — ушедший проиграл
     assert v["status"] == "over" and v["reason"] == "abandon"
-    leaver_color = "white" if v["white"]["id"] == leaver else "black"
-    assert v["result"] == ("0-1" if leaver_color == "white" else "1-0")
-    assert store.player(leaver)["losses"] == 1 and store.player(stayer)["wins"] == 1
+    assert v["result"] == ("0-1" if v["white"]["id"] == 2 else "1-0")
+    assert store.player(2)["losses"] == 1 and store.player(1)["wins"] == 1
 
     gid = store.create(1, "invite")  # вышли оба — никому не засчитываем
     store.join(3, gid)
-    now[0] += 10 * 60
-    assert store.view(1, gid)["status"] == "play"
+    now[0] += 3600
+    wait(1, gid, 60)  # Иван вернулся через час: Олег не проиграл сразу, у него свежие 3 минуты
+    assert store.view(1, gid)["status"] == "play" and store.view(1, gid)["opp_away"] == 58
+    wait(3, gid, 10)  # Олег вернулся
+    wait(1, gid, 300)  # теперь ушёл Олег, Иван на месте 5 минут
+    assert store.view(1, gid)["reason"] == "abandon" and store.player(3)["losses"] == 1
+
+    gid = store.create(1, "invite")  # друг принял приглашение, когда автор давно вышел из приложения
+    now[0] += 3600
+    store.join(2, gid)
+    wait(2, gid, 600)
+    assert store.view(2, gid)["status"] == "play"  # автор ещё не знает о партии — не проигрывает
 
     gid = store.create(1, "bot", 1)  # с ботом уход ничего не решает
     now[0] += 10 * 60
     assert store.view(1, gid)["status"] == "play"
+
+
+def test_search_skips_players_who_left(store, monkeypatch):
+    now = [time.time()]
+    monkeypatch.setattr(games.time, "time", lambda: now[0])
+    old = store.create(1, "search")
+    now[0] += 3600  # Иван искал час назад и закрыл приложение
+    store.touch({"id": 2, "first_name": "Мария"})
+    new = store.create(2, "search")
+    assert new != old and store.view(2, new)["status"] == "wait"
+    store.touch({"id": 3, "first_name": "Олег"})
+    assert store.create(3, "search") == new  # Мария ищет прямо сейчас — к ней и садимся

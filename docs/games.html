@@ -225,6 +225,8 @@ let state = { view: "lobby", game: null, me: null, games: [], top: [], sel: null
 let timer = null;
 function poll(ms) { clearTimeout(timer); timer = setTimeout(tick, ms); }
 async function tick() {
+  // свёрнутое приложение не спрашивает сервер: иначе на Android игрок считался бы «на месте»
+  if (document.hidden) { poll(2000); return; }
   try {
     if (state.view === "game" && state.game) {
       const g = await api("/api/game?id=" + encodeURIComponent(state.game.id));

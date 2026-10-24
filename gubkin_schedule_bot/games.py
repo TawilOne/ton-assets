@@ -37,6 +37,7 @@ ORIGINS = {"https://tawilone.github.io", *filter(None, os.environ.get("GAMES_ORI
 AUTH_MAX_AGE = 2 * 86400   # подпись Telegram действует двое суток с открытия мини-приложения
 INACTIVE = 3 * 86400       # три дня без хода — тот, чей ход, проигрывает по времени
 ABANDON = 3 * 60           # вышел из партии (закрыл мини-приложение/Telegram) и не вернулся за 3 минуты — поражение
+GRACE = 20                 # мини-приложение спрашивает сервер каждые 2–8 с; тишина дольше — человека нет на месте
 WAIT_MAX = 86400           # приглашение и поиск соперника живут сутки
 START_RATING, K = 1200, 32
 BOT = 0  # «игрок» бот: id 0 в партии; партии с ботом не трогают ни рейтинг, ни статистику
@@ -173,16 +174,13 @@ class Store:
             loser_white = board.turn == chess.WHITE
             self._finish(g, "0-1" if loser_white else "1-0", "time")
             return self.db.execute("SELECT * FROM games WHERE id = ?", (g["id"],)).fetchone()
-        if g["status"] == "play" and g["kind"] != "bot":
-            # один вышел из партии и не возвращается, а второй на месте — вышедший проиграл
-            away_w, away_b = now - (g["seen_w"] or g["updated"]), now - (g["seen_b"] or g["updated"])
-            if away_w > ABANDON and away_b <= ABANDON:
-                self._finish(g, "0-1", "abandon")
-            elif away_b > ABANDON and away_w <= ABANDON:
-                self._finish(g, "1-0", "abandon")
-            else:
-                return g
-            return self.db.execute("SELECT * FROM games WHERE id = ?", (g["id"],)).fetchone()
+        if g["status"] == "play" and g["kind"] != "bot" and g["seen_w"] and g["seen_b"]:
+            # один вышел и не вернулся за ABANDON, пока второй был на месте, — вышедший проиграл.
+            # Время, когда на месте не было никого, не считается (это делает here())
+            gap = g["seen_b"] - g["seen_w"]
+            if abs(gap) > ABANDON:
+                self._finish(g, "0-1" if gap > 0 else "1-0", "abandon")
+                return self.db.execute("SELECT * FROM games WHERE id = ?", (g["id"],)).fetchone()
         return g
 
     @staticmethod
@@ -208,8 +206,10 @@ class Store:
             # уже ищем — не плодим второй поиск; есть чужой поиск — садимся к нему
             mine = self.db.execute("SELECT id FROM games WHERE status = 'wait' AND kind = 'search' AND creator = ?",
                                    (uid,)).fetchone()
-            for g in self.db.execute("SELECT * FROM games WHERE status = 'wait' AND kind = 'search' AND creator != ? "
-                                     "ORDER BY created", (uid,)).fetchall():
+            # садимся только к тем, кто сейчас в мини-приложении, — а не к тому, кто искал час назад и ушёл
+            for g in self.db.execute("SELECT g.* FROM games g JOIN players p ON p.id = g.creator "
+                                     "WHERE g.status = 'wait' AND g.kind = 'search' AND g.creator != ? AND p.seen > ? "
+                                     "ORDER BY g.created", (uid, time.time() - GRACE)).fetchall():
                 try:
                     self._expire(g)
                 except GameError:
@@ -236,8 +236,11 @@ class Store:
             return gid  # своё приглашение — ждём друга
         white, black = (uid, g["creator"]) if random.random() < 0.5 else (g["creator"], uid)
         now = time.time()
+        # автор приглашения мог давно закрыть приложение: пока он не откроет партию, уход ему не считаем (0)
+        p = self.db.execute("SELECT seen FROM players WHERE id = ?", (g["creator"],)).fetchone()
+        seen = {uid: now, g["creator"]: now if p and (p["seen"] or 0) > now - GRACE else 0}
         self.db.execute("UPDATE games SET white = ?, black = ?, status = 'play', updated = ?, seen_w = ?, seen_b = ? "
-                        "WHERE id = ?", (white, black, now, now, now, gid))
+                        "WHERE id = ?", (white, black, now, seen[white], seen[black], gid))
         self.db.commit()
         return gid
 
@@ -328,10 +331,20 @@ class Store:
         self.db.commit()
 
     def here(self, uid: int, gid: str) -> None:
-        """Игрок сейчас в партии (страница партии открыта и спрашивает сервер)."""
-        self.db.execute("UPDATE games SET seen_w = CASE WHEN white = ? THEN ? ELSE seen_w END, "
-                        "seen_b = CASE WHEN black = ? THEN ? ELSE seen_b END WHERE id = ? AND status = 'play'",
-                        (uid, time.time(), uid, time.time(), gid))
+        """Игрок сейчас в мини-приложении (открыта партия или список игр и спрашивает сервер)."""
+        try:
+            g = self._get(gid)
+        except GameError:
+            return
+        if g["status"] != "play" or uid not in (g["white"], g["black"]):
+            return
+        now = time.time()
+        mine, other = ("seen_w", "seen_b") if uid == g["white"] else ("seen_b", "seen_w")
+        upd = {mine: now}
+        if g["kind"] != "bot" and g[other] and (not g[mine] or now - g[mine] > GRACE):
+            # меня не было: пока меня не было, отсутствие соперника не считается — его отсчёт стоял на паузе
+            upd[other] = now if not g[mine] else min(now, g[other] + (now - g[mine]))
+        self.db.execute(f"UPDATE games SET {', '.join(f'{k} = ?' for k in upd)} WHERE id = ?", (*upd.values(), gid))
         self.db.commit()
 
     def view(self, uid: int, gid: str) -> dict:
@@ -356,9 +369,9 @@ class Store:
 
     @staticmethod
     def _away(g, color: str) -> int:
-        if g["status"] != "play":
+        seen = g["seen_w" if color == "white" else "seen_b"]
+        if g["status"] != "play" or not seen:
             return 0
-        seen = g["seen_w" if color == "white" else "seen_b"] or g["updated"]
         return max(0, int(time.time() - seen))
 
     def _side(self, g, color: str) -> dict | None:
@@ -367,11 +380,14 @@ class Store:
                     "rating": None, "faculty": "", "wins": 0, "losses": 0, "draws": 0}
         return self.player(g[color])
 
-    def my_games(self, uid: int) -> list[dict]:
+    def my_games(self, uid: int, here: bool = False) -> list[dict]:
+        """here — игрок в списке игр мини-приложения: это тоже «на месте», уходом не считается."""
         rows = self.db.execute("SELECT id FROM games WHERE (white = ? OR black = ? OR creator = ?) "
                                "AND status != 'over' ORDER BY updated DESC", (uid, uid, uid)).fetchall()
         out = []
         for r in rows:
+            if here:
+                self.here(uid, r["id"])
             try:
                 out.append(self.view(uid, r["id"]))
             except GameError:
@@ -506,7 +522,7 @@ def make_app(store: Store, token: str, engine: Engine | None = None) -> web.Appl
 
     async def me(request):
         uid = who(request)
-        return web.json_response({"me": store.player(uid), "games": store.my_games(uid)})
+        return web.json_response({"me": store.player(uid), "games": store.my_games(uid, here=True)})
 
     async def top(request):
         who(request)
