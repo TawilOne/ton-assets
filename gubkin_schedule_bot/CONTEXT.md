@@ -22,13 +22,13 @@ Telegram-бот расписания РГУ нефти и газа им. Губ�
 - `deploy/` — сервер: `install.sh`, `update.sh`, `relay.sh`, `tg-relay-worker.js`, `doctor.sh`.
 
 ## Как всё работает сейчас
-- Бот живёт на VPS FirstVDS в Москве (`root@153.76.167.68`, Ubuntu 24.04, служба `gubkin-bot`).
+- Бот живёт на VPS FirstVDS в Москве (вход `root@<IP сервера>` — адрес в `server.txt` на ноутбуке, в git не хранится; Ubuntu 24.04, служба `gubkin-bot`).
 - Telegram в РФ заблокирован → бот ходит через **Cloudflare Worker** (адрес — на сервере в /etc/systemd/system/gubkin-bot.service.d/relay.conf)
   (переменная `TG_API_BASE`, включено `deploy/relay.sh`).
 - Сайт Губкина **не пускает серверы хостингов** (HTTPS с VPS не открывается) → бот на сервере в режиме
   `GUBKIN_OFFLINE=1`, расписание присылает **ноутбук** (`sync.py`, задача Windows `GubkinSync`:
   через 2 мин после входа и каждые 3 часа, тихо; по ssh-ключу `~/.ssh/gubkin_sync_ed25519`).
-- Обновить бота на сервере (из PowerShell): `ssh root@153.76.167.68 "bash /opt/gubkin-bot/deploy/update.sh"`.
+- Обновить бота на сервере (из PowerShell): `ssh root@<IP сервера> "bash /opt/gubkin-bot/deploy/update.sh"`.
 - Группы: ноутбук раз в сутки качает списки групп факультетов (`groups.json`, формат `{"faculties": [...]}`) и по плану —
   расписание: выбранные пользователями группы — ближайшие 3 недели каждый раз, их дальние недели — раз в 3 дня
   (`FAR_AGE`), остальные группы — ОДНА неделя (пн–чт текущая, пт–вс следующая). Чем меньше запросов, тем реже
@@ -49,7 +49,7 @@ Telegram-бот расписания РГУ нефти и газа им. Губ�
   `t.me/бот?start=chess_<id>`, рейтинг Эло вуза с факультетами. Игра с ботом (Stockfish, 3 уровня;
   без него — простой встроенный движок) — тренировка: ни в рейтинг, ни в статистику. Сервер — `games.py` (aiohttp + python-chess,
   SQLite `games.db`, проверка подписи Telegram), служба `gubkin-games`, снаружи HTTPS через Caddy на
-  `153-76-167-68.sslip.io`. Включается один раз: `bash /opt/gubkin-bot/deploy/games.sh`.
+  `<IP-через-дефисы>.sslip.io`. Включается один раз: `bash /opt/gubkin-bot/deploy/games.sh`.
 - Мини-приложение обновляется само (GitHub Pages, до ~10 мин кэша); ссылка из бота меняется раз в 5 мин.
 
 ## Секреты — никогда не писать в чат и в git

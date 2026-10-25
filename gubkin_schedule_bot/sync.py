@@ -15,7 +15,7 @@
     python sync.py --interactive   вручную (sync_now.bat): с выводом и вводом капчи
     pythonw sync.py                тихо, по расписанию Windows (так запускает автозапуск)
 
-Адрес сервера — в файле server.txt (по умолчанию root@153.76.167.68).
+Адрес сервера — в файле server.txt (одна строка вида root@IP; файл в git не попадает).
 """
 from __future__ import annotations
 
@@ -40,7 +40,6 @@ from gubkin_api import CaptchaRequired, GubkinError, normalize_code, write_atomi
 import guard  # noqa: E402
 from schedule import parse_week, semester_bounds, slim_week  # noqa: E402
 
-DEFAULT_SERVER = "root@153.76.167.68"
 REMOTE = "/opt/gubkin-bot/gubkin_schedule_bot"
 BRANCH = "claude/rgu-gubkina-schedule-bot-snqhke"
 TASK = "GubkinSync"
@@ -70,8 +69,10 @@ def server() -> str:
     f = HERE / "server.txt"
     if f.exists() and f.read_text(encoding="utf-8").strip():
         return f.read_text(encoding="utf-8").strip()
-    f.write_text(DEFAULT_SERVER, encoding="utf-8")
-    return DEFAULT_SERVER
+    msg = ("Нет адреса сервера: создайте рядом с sync.py файл server.txt "
+           "с одной строкой вида root@IP-сервера и запустите снова.")
+    say(msg)
+    raise SystemExit(msg)
 
 
 def ssh(args: list[str], data: bytes | None = None, batch: bool = True, timeout: int = 90):
