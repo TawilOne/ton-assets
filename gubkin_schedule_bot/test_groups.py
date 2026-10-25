@@ -1269,3 +1269,16 @@ def test_bot_sends_chess_search_notifications(env, monkeypatch, tmp_path):
     assert blocked == [(3, True)]  # заблокировал бота — отмечаем
     run(bot.games_notify_job(c))
     assert len(sent) == 1  # очередь пуста — повторно не шлём
+
+
+def test_teacher_link_shows_full_name(env):
+    """Нажали на преподавателя в расписании — бот присылает полное ФИО. Поддельная ссылка — обычное приветствие."""
+    import schedule
+    code = schedule.teacher_code("Петров Пётр Петрович")
+    u = update(uid=9, text="/start t_" + code)
+    run(bot.cmd_start(u, ctx(args=["t_" + code])))
+    (text, kw), = u.effective_message.sent
+    assert text == "👤 Преподаватель:\n<b>Петров Пётр Петрович</b>" and kw["parse_mode"] == "HTML"
+    u = update(uid=9, text="/start t_PHNjcmlwdD4")
+    run(bot.cmd_start(u, ctx(args=["t_PHNjcmlwdD4"])))
+    assert "Расписание" in u.effective_message.sent[0][0]

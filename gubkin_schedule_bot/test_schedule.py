@@ -2,11 +2,13 @@
 
 import datetime as dt
 import json
+import re
 
 import pytest
 
 from gubkin_api import GubkinClient, GubkinError, normalize_code
-from schedule import fetch_range, parse_week, semester_bounds, to_csv, to_ics, to_json, to_text
+from schedule import (Lesson, fetch_range, format_lesson_html, parse_week, semester_bounds, to_csv, to_ics, to_json,
+                      to_text)
 
 WEEK = {
     "state": True,
@@ -217,3 +219,26 @@ def test_cache_survives_power_loss_during_write(tmp_path, monkeypatch):
     c._save_cache()  # запись «оборвалась» до подмены файла
     assert cache.read_text(encoding="utf-8") == before
     assert len(GubkinClient(cache_file=str(cache), offline=True)._cache) == 1
+
+
+def test_teacher_is_a_link_to_full_name(monkeypatch):
+    """В расписании «Петров П. П.» — ссылка t.me/бот?start=t_<код>; в коде — полное ФИО."""
+    import schedule
+    for full in ("Петров Пётр Петрович", "Иванов-Петров Ёжик Йодович", "Абдурахмангаджиев Магомедшапи Абдулгамидович"):
+        code = schedule.teacher_code(full)
+        assert code and len("t_" + code) <= 64 and re.fullmatch(r"[A-Za-z0-9_-]+", code)
+        assert schedule.teacher_from_code(code) == full
+    assert schedule.teacher_from_code("PHNjcmlwdD4") == ""  # «<script>» — не ФИО, не покажем
+    assert schedule.teacher_from_code("!!!") == ""
+    assert schedule.teacher_code("Ли" * 40) == ""  # слишком длинное — без ссылки
+
+    l = Lesson(date="2026-10-12", weekday="Понедельник", start="08:30", end="10:00", subject="Геология",
+               teacher="Петров Пётр Петрович, Сидорова Анна")
+    assert "👤 Петров П. П., Сидорова А." in format_lesson_html(l)  # бот ещё не знает своё имя — просто текст
+    monkeypatch.setattr(schedule, "TEACHER_LINK", "https://t.me/gubkin_test_bot?start=t_")
+    html = format_lesson_html(l)
+    links = re.findall(r'<a href="https://t\.me/gubkin_test_bot\?start=t_([A-Za-z0-9_-]+)">([^<]+)</a>', html)
+    assert [(schedule.teacher_from_code(c), short) for c, short in links] == [
+        ("Петров Пётр Петрович", "Петров П. П."), ("Сидорова Анна", "Сидорова А.")]
+    l.teacher = "Ли"  # сокращать нечего — и ссылка не нужна
+    assert "👤 Ли" in format_lesson_html(l) and "<a " not in format_lesson_html(l)

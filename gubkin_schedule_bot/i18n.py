@@ -223,6 +223,8 @@ TEXT = {
                    "fr": f"♟ {{who}} cherche un adversaire aux échecs. Une partie{NBSP}?\n\n"
                          f"Pour ne plus recevoir ces messages{NBSP}: bouton 🔔 dans les mini-jeux."},
     "chess_seek_btn": {"ru": "♟ Играть", "en": "♟ Play", "fr": "♟ Jouer"},
+    "teacher_full": {"ru": "👤 Преподаватель:\n<b>{name}</b>", "en": "👤 Teacher:\n<b>{name}</b>",
+                     "fr": f"👤 Enseignant{NBSP}:\n<b>{{name}}</b>"},
     "games_open": {"ru": "🎮 Открыть игры", "en": "🎮 Open games", "fr": "🎮 Ouvrir les jeux"},
     "map_note": {"ru": "⚠️ Карта ещё находится в разработке и может быть неточной.",
                  "en": "⚠️ The map is still in development and may be inaccurate.",

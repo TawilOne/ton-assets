@@ -49,6 +49,7 @@ import guard
 import i18n
 import my_commands as my
 from gubkin_api import CaptchaRequired, GubkinClient, GubkinError, normalize_code, write_atomic
+import schedule
 from schedule import (_minutes, fetch_range, locate_room, semester_bounds, slim_week, to_csv, to_html,
                       to_ics, to_json, to_text)
 
@@ -412,7 +413,8 @@ def _split(text: str) -> list[str]:
 async def _send_text(update: Update, text: str, html: bool = False) -> None:
     kb = keyboard(_lang(update))
     for part in _split(text):
-        await update.effective_message.reply_text(part, parse_mode="HTML" if html else None, reply_markup=kb)
+        await update.effective_message.reply_text(part, parse_mode="HTML" if html else None, reply_markup=kb,
+                                                  disable_web_page_preview=True)  # ссылки на преподавателей — без карточек
 
 
 def _today() -> dt.date:
@@ -498,6 +500,12 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if re.fullmatch(r"chess_[A-Za-z0-9]{4,16}", arg):
         await _open_game(update, ctx, arg[6:])
         return
+    if arg.startswith("t_"):  # нажали на преподавателя в расписании — полное ФИО
+        full = schedule.teacher_from_code(arg[2:])
+        if full:
+            await update.effective_message.reply_text(i18n.t("teacher_full", _lang(update), name=full),
+                                                      parse_mode="HTML", reply_markup=keyboard(_lang(update)))
+            return
     lang, grp = _lang(update), _user_group(update)
     await update.effective_message.reply_text(
         help_text(lang, grp) + "\n\n" + i18n.t("beta", lang) + "\n\n" + i18n.t("feedback", lang),
@@ -841,7 +849,7 @@ async def digest_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
             continue
         try:
             for part in _split(texts[key]):
-                await ctx.bot.send_message(int(chat_id), part, parse_mode="HTML")
+                await ctx.bot.send_message(int(chat_id), part, parse_mode="HTML", disable_web_page_preview=True)
         except Forbidden:  # пользователь заблокировал бота
             _mark_blocked(chat_id, True)
         except Exception:
@@ -1537,6 +1545,8 @@ BOT_PROFILE = {
 
 async def _set_commands(app: Application) -> None:
     from telegram import BotCommand
+    if app.bot.username:  # преподаватель в расписании — ссылка на полное ФИО
+        schedule.TEACHER_LINK = f"https://t.me/{app.bot.username}?start=t_"
     try:
         for lang, cmds in COMMANDS.items():
             await app.bot.set_my_commands([BotCommand(c, d) for c, d in cmds],

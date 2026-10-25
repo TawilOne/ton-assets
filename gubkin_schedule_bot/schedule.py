@@ -16,10 +16,12 @@
 
 from __future__ import annotations
 
+import base64
 import csv
 import datetime as dt
 import io
 import json
+import re
 from dataclasses import asdict, dataclass, field
 
 import i18n
@@ -383,6 +385,46 @@ def kind_icon(kind: str) -> str:
     return "📌"
 
 
+# ---- преподаватель: в расписании «Петров П. П.» — ссылка; нажал — бот присылает полное ФИО
+
+TEACHER_LINK = ""  # «https://t.me/<бот>?start=t_» — задаёт bot.py при запуске; пусто — без ссылок
+_NAME_OK = re.compile(r"[A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё .'\-]{1,58}")
+
+
+def teacher_code(full: str) -> str:
+    """ФИО -> код для ссылки t.me/бот?start=t_<код> (Telegram пускает до 64 знаков A-Z a-z 0-9 _ -).
+    ФИО целиком внутри кода (cp1251 + base64): ссылка работает и в старых сообщениях, и после перезапуска.
+    Не влезает или нерусские буквы — пусто (тогда без ссылки)."""
+    full = " ".join(full.split())
+    if not _NAME_OK.fullmatch(full):
+        return ""
+    try:
+        code = base64.urlsafe_b64encode(full.encode("cp1251")).decode().rstrip("=")
+    except UnicodeEncodeError:
+        return ""
+    return code if len(code) <= 62 else ""
+
+
+def teacher_from_code(code: str) -> str:
+    """Обратно из кода — только «похожее на ФИО», иначе пусто (ссылку могли подделать)."""
+    try:
+        full = base64.urlsafe_b64decode(code + "=" * (-len(code) % 4)).decode("cp1251")
+    except (ValueError, UnicodeDecodeError):
+        return ""
+    return full if _NAME_OK.fullmatch(full) else ""
+
+
+def teacher_html(full: str) -> str:
+    """'Петров Пётр Петрович' -> 'Петров П. П.' ссылкой на полное ФИО (несколько — каждый своей)."""
+    out = []
+    for person in (full or "").split(","):
+        person = person.strip()
+        short = short_name(person)
+        code = teacher_code(person) if TEACHER_LINK and short != person else ""
+        out.append(f'<a href="{_esc(TEACHER_LINK + code)}">{_esc(short)}</a>' if code else _esc(short))
+    return ", ".join(x for x in out if x)
+
+
 def short_name(full: str) -> str:
     """'Петров Пётр Петрович' -> 'Петров П. П.' (несколько имён через запятую тоже)."""
     out = []
@@ -430,7 +472,7 @@ def format_lesson_html(l: Lesson, lang: str = "ru") -> str:
         if info:
             lines.append("      " + " · ".join(info))
         if l.teacher:
-            lines.append(f"      👤 {_esc(short_name(l.teacher))}")
+            lines.append(f"      👤 {teacher_html(l.teacher)}")
     for n in l.notes:
         lines.append(f"      ⚠️ <i>{_esc(i18n.note(n, lang))}</i>")
     return "\n".join(lines)
