@@ -45,6 +45,7 @@ WAIT_MAX = 86400           # приглашение и поиск соперни
 NOTIFY_QUIET = (23, 7)     # ночью (по Москве) не будим
 NOTIFY_SAME = 10 * 60      # про одного и того же ищущего — не чаще раза в 10 минут (жмёт «Найти»/«Отменить» по кругу)
 MSK = ZoneInfo("Europe/Moscow")
+CANTEEN_WINDOW = 20 * 60   # загруженность столовой — по отметкам за последние 20 минут
 START_RATING, K = 1200, 32
 BOT = 0  # «игрок» бот: id 0 в партии; партии с ботом не трогают ни рейтинг, ни статистику
 # уровни бота: (название, Skill Level Stockfish 0–20, время на ход, доля случайных ходов)
@@ -139,6 +140,7 @@ class Store:
                 reason TEXT DEFAULT '', draw_offer INTEGER DEFAULT 0, created REAL, updated REAL);
             CREATE INDEX IF NOT EXISTS games_status ON games(status, kind);
             CREATE TABLE IF NOT EXISTS outbox (gid TEXT, uid INTEGER, created REAL);  -- уведомления для бота
+            CREATE TABLE IF NOT EXISTS canteen (uid INTEGER PRIMARY KEY, level INTEGER, at REAL);  -- 0 🟢 1 🟡 2 🔴
             CREATE TABLE IF NOT EXISTS notified (uid INTEGER, searcher INTEGER, at REAL, PRIMARY KEY (uid, searcher));
         """)
         for table, column in (("games", "level INTEGER DEFAULT 0"),  # уровень бота
@@ -222,6 +224,29 @@ class Store:
             who = self.player(r["creator"]) or {}
             out.append({"uid": r["uid"], "gid": r["gid"], "name": who.get("name", ""), "faculty": who.get("faculty", "")})
         return out
+
+    # ---- загруженность столовой: студенты отмечают 🟢🟡🔴, показываем среднее одним значком
+
+    def canteen_vote(self, uid: int, level: int) -> None:
+        if level not in (0, 1, 2):
+            raise GameError("Непонятная отметка")
+        # у каждого одна отметка — последняя: сколько ни жми, перевес не набьёшь
+        self.db.execute("INSERT OR REPLACE INTO canteen (uid, level, at) VALUES (?, ?, ?)", (uid, level, time.time()))
+        self.db.commit()
+
+    def canteen(self, uid: int) -> dict:
+        """level: 0 🟢 / 1 🟡 / 2 🔴 / None — никто не отмечал. Среднее с весами: свежая отметка весит 1,
+        двадцатиминутная — почти 0 (очередь быстро меняется)."""
+        now = time.time()
+        self.db.execute("DELETE FROM canteen WHERE at < ?", (now - CANTEEN_WINDOW,))
+        self.db.commit()
+        rows = self.db.execute("SELECT uid, level, at FROM canteen").fetchall()
+        weights = [(r["level"], max(0.05, 1 - (now - r["at"]) / CANTEEN_WINDOW)) for r in rows]
+        total = sum(w for _, w in weights)
+        avg = sum(v * w for v, w in weights) / total if total else None
+        mine = next((r["level"] for r in rows if r["uid"] == uid), None)
+        return {"level": None if avg is None else 0 if avg < 2 / 3 else 1 if avg < 4 / 3 else 2,
+                "votes": len(rows), "mine": mine, "window": CANTEEN_WINDOW // 60}
 
     # ---- партии
 
@@ -638,6 +663,16 @@ def make_app(store: Store, token: str, engine: Engine | None = None) -> web.Appl
             return web.json_response({"error": "Статистики пока нет — отправьте боту /users"}, status=404)
         return web.Response(text=data, content_type="application/json", headers={"Cache-Control": "no-store"})
 
+    async def canteen(request):  # GET — что сейчас в столовой; POST {"level": 0|1|2} — моя отметка
+        uid = who(request)
+        if request.method == "POST":
+            try:
+                level = int((await body(request)).get("level"))
+            except (TypeError, ValueError):
+                raise GameError("Непонятная отметка") from None
+            store.canteen_vote(uid, level)
+        return web.json_response(store.canteen(uid))
+
     async def top(request):
         who(request)
         return web.json_response({"top": store.top()})
@@ -688,6 +723,8 @@ def make_app(store: Store, token: str, engine: Engine | None = None) -> web.Appl
     app.router.add_get("/api/me", me)
     app.router.add_get("/api/top", top)
     app.router.add_get("/api/admin", admin_stats)
+    app.router.add_get("/api/canteen", canteen)
+    app.router.add_post("/api/canteen", canteen)
     app.router.add_get("/api/searching", searching)
     app.router.add_get("/api/game", game)
     app.router.add_post("/api/new", new)

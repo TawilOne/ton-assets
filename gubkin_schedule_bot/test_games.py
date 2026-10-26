@@ -411,3 +411,48 @@ def test_admin_stats_only_for_admin(store, tmp_path, monkeypatch):
         finally:
             await client.close()
     asyncio.run(go())
+
+
+def test_canteen_average(store, monkeypatch):
+    """Загруженность столовой: каждый отмечает 🟢🟡🔴, показываем среднее одним значком.
+    У человека одна отметка (последняя), старые (больше 20 минут) забываются, свежие весят больше."""
+    now = [time.time()]
+    monkeypatch.setattr(games.time, "time", lambda: now[0])
+    assert store.canteen(1) == {"level": None, "votes": 0, "mine": None, "window": 20}  # никто не отмечал
+    store.canteen_vote(1, 2)
+    assert store.canteen(2)["level"] == 2 and store.canteen(1)["mine"] == 2
+    for _ in range(10):
+        store.canteen_vote(1, 2)  # жмёт 🔴 много раз — всё равно одна отметка
+    store.canteen_vote(2, 0)
+    store.canteen_vote(3, 0)
+    v = store.canteen(1)
+    assert v["votes"] == 3 and v["level"] == 1  # 🔴🟢🟢 → среднее 0.67 → 🟡
+    store.canteen_vote(3, 1)
+    assert store.canteen(1)["level"] == 1  # 🔴🟢🟡 → 🟡
+    now[0] += 15 * 60
+    store.canteen_vote(4, 0)
+    store.canteen_vote(5, 0)
+    assert store.canteen(1)["level"] == 0  # две свежие 🟢 перевешивают старые отметки
+    now[0] += 10 * 60
+    v = store.canteen(1)
+    assert v["votes"] == 2 and v["mine"] is None and v["level"] == 0  # отметкам 25 минут — забыты
+    now[0] += 30 * 60
+    assert store.canteen(1)["level"] is None
+    with pytest.raises(games.GameError):
+        store.canteen_vote(1, 5)
+
+
+def test_http_canteen(store):
+    async def go():
+        client = TestClient(TestServer(games.make_app(store, TOKEN)))
+        await client.start_server()
+        try:
+            h = {"X-Init-Data": init_data(1)}
+            assert (await (await client.get("/api/canteen", headers=h)).json())["level"] is None
+            r = await client.post("/api/canteen", json={"level": 1}, headers=h)
+            assert (await r.json())["level"] == 1 and (await r.json())["mine"] == 1
+            assert (await client.post("/api/canteen", json={"level": "x"}, headers=h)).status == 400
+            assert (await client.get("/api/canteen")).status == 401
+        finally:
+            await client.close()
+    asyncio.run(go())

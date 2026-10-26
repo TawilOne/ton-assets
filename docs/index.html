@@ -41,6 +41,17 @@
   .tabs a { flex: 1; text-align: center; padding: 8px 6px; border-radius: 10px; color: var(--muted);
             text-decoration: none; font-weight: 700; font-size: 14px; }
   .tabs a.on { background: #fff; color: #000; }
+  /* загруженность столовой: среднее по отметкам студентов */
+  .canteen .cn-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .canteen h2 { margin: 0 0 2px; font-size: 18px; }
+  .cn-now { font-size: 42px; line-height: 1; transition: transform .25s; }
+  .cn-now.pop { transform: scale(1.25); }
+  .cn-row { display: flex; gap: 8px; }
+  .cn-row button { flex: 1; min-width: 0; padding: 10px 4px; border-radius: 14px; border: 1px solid var(--line);
+                   background: var(--surface-2); color: var(--text); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+  .cn-row button span { display: block; font-size: 22px; margin-bottom: 2px; }
+  .cn-row button.on { border-color: rgba(255,255,255,.55); background: rgba(255,255,255,.10); }
+  .cn-row button:active { transform: scale(.96); }
   /* большая кнопка «Карта вуза» — открывает campus.html */
   .campus-btn { display: flex; align-items: center; gap: 14px; margin: 14px 0 0; padding: 16px 18px; border-radius: var(--radius);
                 text-decoration: none; color: var(--text); border: 1px solid rgba(255,0,0,.35);
@@ -215,6 +226,12 @@
 <div id="main"></div>
 <div class="card" id="day"><div class="section-title"><h2 id="day-title">Пары дня</h2><span id="count"></span></div>
   <ul class="timeline" id="list"></ul></div>
+<div class="card canteen" id="canteen" hidden>
+  <div class="cn-top"><div><h2 id="cn-title">Столовая сейчас</h2><span class="eyebrow" id="cn-sub"></span></div>
+    <div class="cn-now" id="cn-now">⚪</div></div>
+  <div class="eyebrow" id="cn-ask" style="margin:12px 0 8px">Вы в столовой? Отметьте, какая очередь:</div>
+  <div class="cn-row" id="cn-row"></div>
+</div>
 <a class="campus-btn" id="campus-btn" href="campus.html"><span class="ico">🗺</span><span><b id="campus-t">Карта вуза</b>
   <small id="campus-s">Двор, главный корпус, 2 корпус, ДК, библиотека</small></span><span class="go">›</span></a>
 
@@ -470,6 +487,55 @@ function setCampusLink(building, floor) {
   document.getElementById("campus-btn").href = "campus.html" + (q.toString() ? "?" + q : "");
 }
 setCampusLink(null);
+
+// ---- столовая: студенты отмечают 🟢🟡🔴, сервер (тот же, что у игр) отдаёт среднее одним значком
+const CN = {
+  title: L3("Столовая сейчас", "Canteen right now", "Cantine en ce moment"),
+  ask: L3("Вы в столовой? Отметьте, какая очередь:", "At the canteen? Mark how busy it is:", "À la cantine ? Indiquez l'affluence :"),
+  levels: [["🟢", L3("Свободно", "Quiet", "Calme")], ["🟡", L3("Очередь", "Some queue", "File d'attente")],
+           ["🔴", L3("Битком", "Packed", "Bondé")]],
+  none: L3("Пока никто не отметил", "No one has marked it yet", "Personne n'a encore indiqué"),
+  votes: (n, m) => LANG === "en" ? `${n} ${n === 1 ? "mark" : "marks"} in the last ${m} min`
+    : LANG === "fr" ? `${n} avis ces ${m} dernières minutes`
+    : `${n} ${n % 10 === 1 && n % 100 !== 11 ? "отметка" : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? "отметки" : "отметок"} за ${m} мин`,
+  thanks: L3("Спасибо! Учтём", "Thanks!", "Merci !"),
+};
+const GAMES_API = (params.get("api") || "https://153-76-167-68.sslip.io").replace(/\/$/, "");
+let canteen = null, cnTimer = null;
+async function cnApi(body) {
+  const r = await fetch(GAMES_API + "/api/canteen", body ? {
+    method: "POST", headers: { "X-Init-Data": tg.initData, "Content-Type": "application/json" }, body: JSON.stringify(body),
+  } : { headers: { "X-Init-Data": tg.initData } });
+  if (!r.ok) throw new Error(r.status);
+  return r.json();
+}
+function cnRender(pop) {
+  const box = document.getElementById("canteen");
+  if (!canteen) return;
+  box.hidden = false;
+  document.getElementById("cn-title").textContent = CN.title;
+  document.getElementById("cn-ask").textContent = CN.ask;
+  const now = document.getElementById("cn-now");
+  now.textContent = canteen.level === null ? "⚪" : CN.levels[canteen.level][0];
+  if (pop) { now.classList.add("pop"); setTimeout(() => now.classList.remove("pop"), 250); }
+  document.getElementById("cn-sub").textContent = canteen.votes ? CN.votes(canteen.votes, canteen.window) : CN.none;
+  document.getElementById("cn-row").innerHTML = CN.levels.map(([ico, name], i) =>
+    `<button data-l="${i}" class="${canteen.mine === i ? "on" : ""}"><span>${ico}</span>${esc(name)}</button>`).join("");
+  document.querySelectorAll("#cn-row button").forEach(b => b.onclick = async () => {
+    try { tg.HapticFeedback && tg.HapticFeedback.impactOccurred("light"); } catch (e) {}
+    try { canteen = await cnApi({ level: +b.dataset.l }); cnRender(true); document.getElementById("cn-sub").textContent = CN.thanks; }
+    catch (e) {}
+  });
+}
+async function cnLoad() {
+  clearTimeout(cnTimer);
+  if (!document.hidden) { try { canteen = await cnApi(); cnRender(); } catch (e) {} }  // сервер не ответил — карточки нет
+  cnTimer = setTimeout(cnLoad, 30000);
+}
+if (tg && tg.initData) {
+  cnLoad();
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) cnLoad(); });
+}
 
 function render() {
   const now = nowMoscow();
