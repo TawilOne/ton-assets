@@ -1301,6 +1301,7 @@ BROADCAST_HELP = (
     "/broadcast Текст объявления\n\n"
     "Можно добавить переводы — тем, у кого выбран английский или французский, придёт свой вариант:\n\n"
     "/broadcast Текст по-русски\n---en---\nText in English\n---fr---\nTexte en français\n\n"
+    "С картинкой: отправьте картинку, а в подписи к ней напишите /broadcast Текст (до 1024 знаков).\n\n"
     "Сначала бот покажет, как будет выглядеть сообщение, и спросит подтверждение. "
     "Вместе с сообщением у каждого обновится нижняя панель кнопок — /start нажимать не нужно."
 )
@@ -1318,18 +1319,29 @@ async def cmd_broadcast(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_user.id != _admin_id():
         await update.effective_message.reply_text("Эта команда только для администратора.")
         return
-    raw = (update.effective_message.text or "").split(maxsplit=1)
+    msg = update.effective_message
+    # команда может быть и подписью к картинке — тогда рассылаем картинку с этой подписью
+    raw = (msg.text or msg.caption or "").split(maxsplit=1)
+    photo = msg.photo[-1].file_id if msg.photo else None
     texts = _parse_broadcast(raw[1]) if len(raw) > 1 else {}
     if not texts.get("ru"):
-        await update.effective_message.reply_text(BROADCAST_HELP)
+        await msg.reply_text(BROADCAST_HELP)
         return
-    ctx.bot_data["broadcast"] = texts
+    if photo and any(len(t) > 1024 for t in texts.values()):  # у подписи к картинке в Telegram предел 1024 знака
+        await msg.reply_text("Подпись к картинке длиннее 1024 знаков — Telegram такую не пропустит. "
+                             "Сократите текст или отправьте картинку и текст отдельно.")
+        return
+    ctx.bot_data["broadcast"], ctx.bot_data["broadcast_photo"] = texts, photo
     n = len(_load_users())
     for lang in i18n.LANGS:  # предпросмотр каждого варианта
         if lang in texts:
-            await update.effective_message.reply_text(f"Предпросмотр ({i18n.LANG_NAMES[lang]}):\n\n{texts[lang]}")
-    await update.effective_message.reply_text(
-        f"Отправить это {n} пользователям? Без перевода английским и французским придёт русский вариант.",
+            if photo:
+                await msg.reply_photo(photo, caption=texts[lang])
+            else:
+                await msg.reply_text(f"Предпросмотр ({i18n.LANG_NAMES[lang]}):\n\n{texts[lang]}")
+    await msg.reply_text(
+        f"Отправить это{' с картинкой' if photo else ''} {n} пользователям? "
+        "Без перевода английским и французским придёт русский вариант.",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(f"✅ Отправить всем ({n})", callback_data="bc:send"),
                                             InlineKeyboardButton("✖️ Отмена", callback_data="bc:cancel")]]))
 
@@ -1339,7 +1351,7 @@ async def on_broadcast(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await q.answer()
     if update.effective_user.id != _admin_id():
         return
-    texts = ctx.bot_data.pop("broadcast", None)
+    texts, photo = ctx.bot_data.pop("broadcast", None), ctx.bot_data.pop("broadcast_photo", None)
     if q.data != "bc:send" or not texts:
         await q.edit_message_text("Рассылка отменена.")
         return
@@ -1348,7 +1360,10 @@ async def on_broadcast(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     for uid in list(_load_users()):
         lang = i18n.get_lang(uid)
         try:  # вместе с сообщением — новая нижняя панель на языке пользователя
-            await ctx.bot.send_message(int(uid), texts.get(lang) or texts["ru"], reply_markup=keyboard(lang))
+            if photo:
+                await ctx.bot.send_photo(int(uid), photo, caption=texts.get(lang) or texts["ru"], reply_markup=keyboard(lang))
+            else:
+                await ctx.bot.send_message(int(uid), texts.get(lang) or texts["ru"], reply_markup=keyboard(lang))
             ok += 1
         except Forbidden:  # заблокировал бота или удалил аккаунт
             _mark_blocked(uid, True)
@@ -1611,6 +1626,7 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(on_group, pattern=r"^grp:"))
     app.add_handler(CommandHandler("untranslated", cmd_untranslated))
     app.add_handler(CommandHandler("broadcast", cmd_broadcast))
+    app.add_handler(MessageHandler(filters.PHOTO & filters.CaptionRegex(r"^/broadcast(@\w+)?(\s|$)"), cmd_broadcast))
     app.add_handler(CallbackQueryHandler(on_broadcast, pattern=r"^bc:"))
     app.add_handler(CommandHandler("myid", cmd_myid))
     app.add_handler(CommandHandler("users", cmd_users))

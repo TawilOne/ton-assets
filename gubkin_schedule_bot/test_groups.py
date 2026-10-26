@@ -51,7 +51,11 @@ GROUPS_JSON = {"faculties": [
 class Msg:
     def __init__(self, text=""):
         self.text = text
+        self.caption, self.photo = None, ()
         self.sent = []
+
+    async def reply_photo(self, photo, **kw):
+        self.sent.append((("photo", photo), kw))
 
     async def reply_text(self, text, **kw):
         self.sent.append((text, kw))
@@ -1297,3 +1301,34 @@ def test_users_saves_every_user_for_the_admin_page(env, monkeypatch):
     data = json.loads(bot.ADMIN_STATS_FILE.read_text(encoding="utf-8"))
     assert len(data["u"]) == 2000 and data["t"]["users"] == 2000
     assert data["u"][0][0] == "Студент 0" and data["u"][-1][0] == "Студент 1999"  # недавние — первыми
+
+
+def test_broadcast_with_photo(env, monkeypatch):
+    """/broadcast подписью к картинке — рассылается картинка с этой подписью (раньше бот молчал)."""
+    monkeypatch.setattr(bot, "_admin_id", lambda: 99)
+    bot.USERS_FILE.write_text(json.dumps({"1": {"name": "a"}, "2": {"name": "b"}}), encoding="utf-8")
+    u = update(uid=99)
+    u.effective_message.text, u.effective_message.caption = None, "/broadcast Вышло обновление!"
+    u.effective_message.photo = (Obj(file_id="small"), Obj(file_id="big"))
+    c = ctx()
+    run(bot.cmd_broadcast(u, c))
+    (preview, kw), (ask, _) = u.effective_message.sent
+    assert preview == ("photo", "big") and kw["caption"] == "Вышло обновление!" and "с картинкой 2" in ask
+    sent = []
+
+    async def send_photo(chat, photo, **kw):
+        sent.append((chat, photo, kw["caption"]))
+
+    async def send_message(chat, text, **kw):
+        raise AssertionError("должна уйти картинка")
+    q = update(uid=99, data="bc:send")
+    c.bot = Obj(send_photo=send_photo, send_message=send_message)
+    run(bot.on_broadcast(q, c))
+    assert sent == [(1, "big", "Вышло обновление!"), (2, "big", "Вышло обновление!")]
+    assert "Разослано: 2" in q.callback_query.edited[-1][0]
+
+    u = update(uid=99)  # слишком длинная подпись — честно говорим, не рассылаем
+    u.effective_message.text, u.effective_message.caption = None, "/broadcast " + "а" * 1100
+    u.effective_message.photo = (Obj(file_id="big"),)
+    run(bot.cmd_broadcast(u, ctx()))
+    assert "1024" in u.effective_message.sent[0][0]
