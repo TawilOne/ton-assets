@@ -1010,11 +1010,13 @@ _games_store: list = [None]
 async def games_notify_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not GAMES_DB.exists():
         return
-    try:
+    def take():
         if _games_store[0] is None:
             import games  # python-chess и aiohttp нужны только здесь
-            _games_store[0] = games.Store(GAMES_DB)
-        todo = _games_store[0].take_outbox()
+            _games_store[0] = games.Store(GAMES_DB, check_same_thread=False)
+        return _games_store[0].take_outbox()
+    try:  # в отдельном потоке: если база занята сервером игр, бот не должен ждать вместе со всеми командами
+        todo = await asyncio.to_thread(take)
     except Exception:  # noqa: BLE001 — база занята или игр на этом сервере нет: попробуем в следующий раз
         log.warning("games outbox", exc_info=True)
         return

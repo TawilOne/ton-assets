@@ -113,9 +113,7 @@ async function loadFull() {
     return r.ok ? await r.json() : null;
   } catch (e) { return null; }
 }
-async function load() {
-  const full = await loadFull();
-  if (full && full.u) return full;
+function load() {
   // данные — в параметре «p» адреса; Telegram дописывает в «#» свои параметры (tgWebAppData…),
   // поэтому из «#» берём только часть до первого «&»
   const h = new URLSearchParams(location.search).get("p") || location.hash.slice(1).split("&")[0];
@@ -330,15 +328,23 @@ function render() {
   if (all) all.onclick = () => { shown = Infinity; render(); };
 }
 
-load().then(data => {
-  if (!data) { document.getElementById("app").innerHTML = `<div class="empty">Откройте статистику кнопкой из бота (/users)</div>`; return; }
+function show(data) {
   nowStr = data.now;
   totals = data.t || null;
   document.getElementById("updated").textContent = `Обновлено ${data.now.slice(8, 10)}.${data.now.slice(5, 7)} в ${data.now.slice(11)}`;
   users = data.u.map(r => ({ name: r[0], username: r[1], count: r[2], first: r[3] || "", last: r[4] || "", lang: r[5],
                              sub: r[6], acts: r[7] || {}, days: r[8] || {}, group: r[9] || "", blocked: r[10] || "" }));
   render();
+}
+// сразу показываем копию из адреса (последние ~300), а полный список с сервера подставляем, когда придёт
+let quick = null;
+try { quick = load(); } catch (e) { quick = null; }
+if (quick) show(quick);
+loadFull().then(full => {
+  if (full && full.u) show(full);
+  else if (!quick) document.getElementById("app").innerHTML = `<div class="empty">Откройте статистику кнопкой из бота (/users)</div>`;
 }).catch(e => {
+  if (quick) return;
   document.getElementById("app").innerHTML = `<div class="empty">Не удалось прочитать данные. Откройте /users ещё раз.<br>
     <small>${esc(e && e.message || e)}</small></div>`;
 });

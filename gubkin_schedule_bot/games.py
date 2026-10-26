@@ -129,8 +129,8 @@ class NotSigned(Exception):
 
 
 class Store:
-    def __init__(self, path: pathlib.Path | str = DB_FILE):
-        self.db = sqlite3.connect(str(path))
+    def __init__(self, path: pathlib.Path | str = DB_FILE, check_same_thread: bool = True):
+        self.db = sqlite3.connect(str(path), check_same_thread=check_same_thread)
         self.db.row_factory = sqlite3.Row
         self.db.executescript("""
             CREATE TABLE IF NOT EXISTS players (id INTEGER PRIMARY KEY, name TEXT, rating INTEGER,
