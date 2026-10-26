@@ -624,11 +624,14 @@ def make_app(store: Store, token: str, engine: Engine | None = None) -> web.Appl
             resp.headers["Vary"] = "Origin"
         return resp
 
-    def who(request) -> int:
+    def who(request, present: bool = True) -> int:
+        """Кто спрашивает (по подписи Telegram). present — человек сейчас в играх: это «на месте» для поиска
+        соперника и правила ухода. Столовая и статистика спрашивают с вкладки «Где пара» — там present=False."""
         user = check_init_data(request.headers.get("X-Init-Data", ""), token)
         if not user:
             raise NotSigned
-        store.touch(user)
+        if present:
+            store.touch(user)
         return user["id"]
 
     async def body(request) -> dict:
@@ -656,7 +659,7 @@ def make_app(store: Store, token: str, engine: Engine | None = None) -> web.Appl
 
     async def admin_stats(request):
         """Статистика бота для admin.html (все пользователи) — только администратору. Файл пишет бот на /users."""
-        uid = who(request)
+        uid = who(request, present=False)
         if uid != admin_id():
             return web.json_response({"error": "Только для администратора"}, status=403)
         try:
@@ -666,7 +669,7 @@ def make_app(store: Store, token: str, engine: Engine | None = None) -> web.Appl
         return web.Response(text=data, content_type="application/json", headers={"Cache-Control": "no-store"})
 
     async def canteen(request):  # GET — что сейчас в столовой; POST {"level": 0|1|2} — моя отметка
-        uid = who(request)
+        uid = who(request, present=False)
         if request.method == "POST":
             try:
                 level = int((await body(request)).get("level"))

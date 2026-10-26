@@ -458,3 +458,26 @@ def test_http_canteen(store):
         finally:
             await client.close()
     asyncio.run(go())
+
+
+def test_canteen_does_not_count_as_being_in_games(store, monkeypatch):
+    """Нажал «Найти соперника» и ушёл на вкладку «Где пара»: карточка столовой спрашивает сервер,
+    но к нему не подсаживают соперника (иначе через 3 минуты — поражение за уход)."""
+    now = [time.time()]
+    monkeypatch.setattr(games.time, "time", lambda: now[0])
+
+    async def go():
+        client = TestClient(TestServer(games.make_app(store, TOKEN)))
+        await client.start_server()
+        try:
+            h1 = {"X-Init-Data": init_data(1, auth=now[0])}
+            gid = (await (await client.post("/api/new", json={"kind": "search"}, headers=h1)).json())["id"]
+            now[0] += 60  # ушёл на «Где пара»: там опрос столовой
+            assert (await client.get("/api/canteen", headers=h1)).status == 200
+            await client.post("/api/canteen", json={"level": 1}, headers=h1)
+            h2 = {"X-Init-Data": init_data(2, first="Мария", auth=now[0])}
+            v = await (await client.post("/api/new", json={"kind": "search"}, headers=h2)).json()
+            assert v["id"] != gid and v["status"] == "wait"  # Марию к Ивану не посадили
+        finally:
+            await client.close()
+    asyncio.run(go())
