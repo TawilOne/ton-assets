@@ -391,3 +391,23 @@ def test_http_notify_switch(store):
         finally:
             await client.close()
     asyncio.run(go())
+
+
+def test_admin_stats_only_for_admin(store, tmp_path, monkeypatch):
+    """Полная статистика бота (её пишет бот на /users) — только администратору, по подписи Telegram."""
+    monkeypatch.setenv("ADMIN_ID", "1")
+
+    async def go():
+        client = TestClient(TestServer(games.make_app(store, TOKEN)))
+        await client.start_server()
+        try:
+            admin, other = {"X-Init-Data": init_data(1)}, {"X-Init-Data": init_data(2)}
+            assert (await client.get("/api/admin", headers=admin)).status == 404  # бот ещё не писал
+            (tmp_path / "admin_stats.json").write_text('{"now": "x", "u": [["Иван"]]}', encoding="utf-8")
+            r = await client.get("/api/admin", headers=admin)
+            assert r.status == 200 and (await r.json())["u"] == [["Иван"]]
+            assert (await client.get("/api/admin", headers=other)).status == 403
+            assert (await client.get("/api/admin")).status == 401
+        finally:
+            await client.close()
+    asyncio.run(go())

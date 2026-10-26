@@ -110,7 +110,7 @@ def env(tmp_path, monkeypatch):
     (tmp_path / "groups.json").write_text(json.dumps(GROUPS_JSON, ensure_ascii=False), encoding="utf-8")
     (tmp_path / "group.json").write_text(json.dumps({"id": "10706", "code": "ГМ-26-11", "code_wanted": "ГМ-26-11"},
                                                     ensure_ascii=False), encoding="utf-8")
-    for name in ("GROUPS_FILE", "USER_GROUPS_FILE", "GROUP_FILE", "USERS_FILE", "SUBSCRIBERS_FILE"):
+    for name in ("GROUPS_FILE", "USER_GROUPS_FILE", "GROUP_FILE", "USERS_FILE", "SUBSCRIBERS_FILE", "ADMIN_STATS_FILE"):
         monkeypatch.setattr(bot, name, tmp_path / getattr(bot, name).name)
     monkeypatch.setattr(i18n, "LANG_FILE", tmp_path / "lang.json")
     monkeypatch.setattr(i18n, "_langs", None)
@@ -1282,3 +1282,18 @@ def test_teacher_link_shows_full_name(env):
     u = update(uid=9, text="/start t_PHNjcmlwdD4")
     run(bot.cmd_start(u, ctx(args=["t_PHNjcmlwdD4"])))
     assert "Расписание" in u.effective_message.sent[0][0]
+
+
+def test_users_saves_every_user_for_the_admin_page(env, monkeypatch):
+    """/users: в адресе — урезанная копия, а в admin_stats.json (его отдаёт сервер игр) — все до одного."""
+    now = dt.datetime.now(bot.MSK)
+    users = {str(1000 + i): {"name": f"Студент {i}", "first": "2026-09-01 10:00", "count": 1,
+                             "last": (now - dt.timedelta(minutes=i)).strftime("%Y-%m-%d %H:%M")} for i in range(2000)}
+    bot.USERS_FILE.write_text(json.dumps(users, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(bot, "_admin_id", lambda: 99)
+    u = update(uid=99)
+    run(bot.cmd_users(u, ctx()))
+    assert "Пользователей: <b>2000</b>" in u.effective_message.sent[0][0]
+    data = json.loads(bot.ADMIN_STATS_FILE.read_text(encoding="utf-8"))
+    assert len(data["u"]) == 2000 and data["t"]["users"] == 2000
+    assert data["u"][0][0] == "Студент 0" and data["u"][-1][0] == "Студент 1999"  # недавние — первыми

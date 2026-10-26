@@ -1381,6 +1381,12 @@ async def cmd_users(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     today = dt.datetime.now(MSK).strftime("%Y-%m-%d")
     active = sum(1 for u in users.values() if u.get("last", "").startswith(today))
     blocked = sum(1 for u in users.values() if u.get("blocked"))
+    # полный список (все, кто когда-либо пользовался ботом) отдаёт админу сервер игр — по подписи Telegram;
+    # в адресе — урезанная копия на случай, если сервер игр не отвечает
+    try:
+        write_atomic(ADMIN_STATS_FILE, json.dumps(_admin_data(users), ensure_ascii=False, separators=(",", ":")))
+    except OSError:
+        log.warning("cannot save %s", ADMIN_STATS_FILE)
     url = (os.environ.get("WEBAPP_URL") or _read_setting("webapp.txt") or DEFAULT_WEBAPP_URL) + \
         f"admin.html?v={int(time.time() // 300)}&p=" + _admin_payload(users)
     await update.effective_message.reply_text(
@@ -1413,14 +1419,11 @@ def _faculty_counts(users: dict, groups: dict) -> list:
 
 
 ADMIN_PAYLOAD_MAX = 6000  # GitHub Pages не открывает слишком длинные адреса («URI Too Long»)
+ADMIN_STATS_FILE = DATA_DIR / "admin_stats.json"  # полная статистика для admin.html — её отдаёт games.py
 
 
-def _admin_payload(users: dict, limit: int = ADMIN_PAYLOAD_MAX) -> str:
-    """Данные для admin.html: сжатый JSON (deflate + base64url) в параметре «p» адреса.
-    В «#» класть нельзя: Telegram дописывает туда свои параметры. Итоги (графики, счётчики) считаем
-    здесь по всем пользователям, а в список кладём столько самых недавних, сколько влезает в limit."""
-    import base64
-    import zlib
+def _admin_data(users: dict) -> dict:
+    """Статистика для admin.html: итоги (графики, счётчики) и строка на КАЖДОГО пользователя, недавние — первыми."""
     subs, groups = _load_subs(), _load_user_groups()
     now = dt.datetime.now(MSK)
     today = now.strftime("%Y-%m-%d")
@@ -1440,14 +1443,24 @@ def _admin_payload(users: dict, limit: int = ADMIN_PAYLOAD_MAX) -> str:
               "new7": sum(1 for u in users.values() if u.get("first", "") >= days[7]),
               "acts": acts, "days": per_day, "fac": _faculty_counts(users, groups)}
     rows = []
-    for uid, u in sorted(users.items(), key=lambda kv: kv[1].get("last", ""), reverse=True)[:300]:
+    for uid, u in sorted(users.items(), key=lambda kv: kv[1].get("last", ""), reverse=True):
         rows.append([u.get("name") or "", u.get("username") or "", u.get("count", 0), u.get("first", ""),
                      u.get("last", ""), i18n.get_lang(uid), (subs.get(uid) or {}).get("time", ""),
                      0, 0, groups.get(uid, ""), u.get("blocked") or ""])
+    return {"now": now.strftime("%Y-%m-%d %H:%M"), "t": totals, "u": rows}
+
+
+def _admin_payload(users: dict, limit: int = ADMIN_PAYLOAD_MAX) -> str:
+    """Запасная копия статистики в параметре «p» адреса: сжатый JSON (deflate + base64url).
+    В «#» класть нельзя: Telegram дописывает туда свои параметры. Итоги — по всем пользователям,
+    а в список — столько самых недавних, сколько влезает в limit (полный список даёт сервер игр)."""
+    import base64
+    import zlib
+    full = _admin_data(users)
+    rows = full["u"][:300]
 
     def pack(n: int) -> str:
-        data = json.dumps({"now": now.strftime("%Y-%m-%d %H:%M"), "t": totals, "u": rows[:n]},
-                          ensure_ascii=False, separators=(",", ":")).encode()
+        data = json.dumps({**full, "u": rows[:n]}, ensure_ascii=False, separators=(",", ":")).encode()
         z = zlib.compressobj(9, zlib.DEFLATED, -15)  # «сырой» deflate — его умеет распаковать браузер
         return base64.urlsafe_b64encode(z.compress(data) + z.flush()).decode().rstrip("=")
 

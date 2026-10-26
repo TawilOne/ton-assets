@@ -101,7 +101,21 @@ const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "
 const plural = (n, a, b, c) => { const x = n % 10, y = n % 100; return x === 1 && y !== 11 ? a : x >= 2 && x <= 4 && (y < 12 || y > 14) ? b : c; };
 
 // данные приходят от бота в части адреса после «#»: сжатый JSON (deflate) в base64url
+// полный список (все, кто когда-либо пользовался ботом) — с сервера игр, по подписи Telegram, только админу;
+// не вышло (сервер не отвечает, открыто не из Telegram) — урезанная копия из адреса
+const API = (new URLSearchParams(location.search).get("api") || "https://153-76-167-68.sslip.io").replace(/\/$/, "");
+async function loadFull() {
+  if (!(tg && tg.initData)) return null;
+  try {
+    const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 6000);
+    const r = await fetch(API + "/api/admin", { headers: { "X-Init-Data": tg.initData }, signal: ctl.signal });
+    clearTimeout(t);
+    return r.ok ? await r.json() : null;
+  } catch (e) { return null; }
+}
 async function load() {
+  const full = await loadFull();
+  if (full && full.u) return full;
   // данные — в параметре «p» адреса; Telegram дописывает в «#» свои параметры (tgWebAppData…),
   // поэтому из «#» берём только часть до первого «&»
   const h = new URLSearchParams(location.search).get("p") || location.hash.slice(1).split("&")[0];
@@ -284,7 +298,8 @@ function render() {
           <div class="who"><b>${esc(u.name || "без имени")}</b><small>${esc(meta)}</small></div>
           <div class="clicks"><b>${u.count}</b><small>${plural(u.count, "клик", "клика", "кликов")}</small></div></div>`;
       }).join("") || `<div class="empty">Никого не нашлось</div>`}
-      ${list.length > shown ? `<button class="more" id="more">Показать ещё ${list.length - shown}</button>` : ""}
+      ${list.length > shown ? `<button class="more" id="more">Показать ещё ${Math.min(50, list.length - shown)}</button>` +
+        (list.length - shown > 50 ? `<button class="more" id="all">Показать всех (${list.length})</button>` : "") : ""}
     </div>`;
 
   // подсказка над столбиком
@@ -311,6 +326,8 @@ function render() {
   });
   const more = document.getElementById("more");
   if (more) more.onclick = () => { shown += 50; render(); };
+  const all = document.getElementById("all");
+  if (all) all.onclick = () => { shown = Infinity; render(); };
 }
 
 load().then(data => {

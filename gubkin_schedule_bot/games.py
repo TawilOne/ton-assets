@@ -63,6 +63,20 @@ def bot_token() -> str:
     return tok
 
 
+def admin_id() -> int | None:
+    """id администратора бота — как в bot.py: ADMIN_ID или admin.txt рядом."""
+    raw = os.environ.get("ADMIN_ID")
+    if not raw:
+        try:
+            raw = next((l.strip() for l in (HERE / "admin.txt").read_text(encoding="utf-8-sig").splitlines() if l.strip()), "")
+        except OSError:
+            raw = ""
+    try:
+        return int(raw) if raw else None
+    except ValueError:
+        return None
+
+
 def check_init_data(init: str, token: str, now: float | None = None) -> dict | None:
     """Проверка подписи Telegram (https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app).
     Возвращает пользователя {"id", "first_name", ...} или None, если подпись неверна или устарела."""
@@ -613,6 +627,17 @@ def make_app(store: Store, token: str, engine: Engine | None = None) -> web.Appl
         store.set_notify(uid, bool((await body(request)).get("on")))
         return web.json_response({"notify": store.notify_on(uid)})
 
+    async def admin_stats(request):
+        """Статистика бота для admin.html (все пользователи) — только администратору. Файл пишет бот на /users."""
+        uid = who(request)
+        if uid != admin_id():
+            return web.json_response({"error": "Только для администратора"}, status=403)
+        try:
+            data = (HERE / "admin_stats.json").read_text(encoding="utf-8")
+        except OSError:
+            return web.json_response({"error": "Статистики пока нет — отправьте боту /users"}, status=404)
+        return web.Response(text=data, content_type="application/json", headers={"Cache-Control": "no-store"})
+
     async def top(request):
         who(request)
         return web.json_response({"top": store.top()})
@@ -662,6 +687,7 @@ def make_app(store: Store, token: str, engine: Engine | None = None) -> web.Appl
     app.router.add_get("/api/ping", ping)
     app.router.add_get("/api/me", me)
     app.router.add_get("/api/top", top)
+    app.router.add_get("/api/admin", admin_stats)
     app.router.add_get("/api/searching", searching)
     app.router.add_get("/api/game", game)
     app.router.add_post("/api/new", new)
