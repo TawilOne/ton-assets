@@ -418,8 +418,10 @@ def test_canteen_average(store, monkeypatch):
     У человека одна отметка (последняя), старые (больше 20 минут) забываются, свежие весят больше."""
     now = [time.time()]
     monkeypatch.setattr(games.time, "time", lambda: now[0])
-    assert store.canteen(1) == {"level": None, "votes": 0, "mine": None, "window": 20}  # никто не отмечал
+    assert store.canteen(1) == {"level": None, "votes": 0, "mine": None, "window": 20, "last": None}  # никто не отмечал
     store.canteen_vote(1, 2)
+    now[0] += 90
+    assert store.canteen(2)["last"] == 90  # последняя отметка — полторы минуты назад
     assert store.canteen(2)["level"] == 2 and store.canteen(1)["mine"] == 2
     for _ in range(10):
         store.canteen_vote(1, 2)  # жмёт 🔴 много раз — всё равно одна отметка

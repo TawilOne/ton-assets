@@ -47,6 +47,7 @@
   .cn-now { font-size: 42px; line-height: 1; transition: transform .25s; }
   .cn-now.pop { transform: scale(1.25); }
   .cn-row { display: flex; gap: 8px; }
+  .cn-last { text-align: center; margin-top: 10px; font-size: 12px; }
   .cn-row button { flex: 1; min-width: 0; padding: 10px 4px; border-radius: 14px; border: 1px solid var(--line);
                    background: var(--surface-2); color: var(--text); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
   .cn-row button span { display: block; font-size: 22px; margin-bottom: 2px; }
@@ -231,6 +232,7 @@
     <div class="cn-now" id="cn-now">⚪</div></div>
   <div class="eyebrow" id="cn-ask" style="margin:12px 0 8px">Вы в столовой? Отметьте, какая очередь:</div>
   <div class="cn-row" id="cn-row"></div>
+  <div class="eyebrow cn-last" id="cn-last"></div>
 </div>
 <a class="campus-btn" id="campus-btn" href="campus.html"><span class="ico">🗺</span><span><b id="campus-t">Карта вуза</b>
   <small id="campus-s">Двор, главный корпус, 2 корпус, ДК, библиотека</small></span><span class="go">›</span></a>
@@ -491,7 +493,11 @@ setCampusLink(null);
 // ---- столовая: студенты отмечают 🟢🟡🔴, сервер (тот же, что у игр) отдаёт среднее одним значком
 const CN = {
   title: L3("Столовая сейчас", "Canteen right now", "Cantine en ce moment"),
-  ask: L3("Вы в столовой? Отметьте, какая очередь:", "At the canteen? Mark how busy it is:", "À la cantine ? Indiquez l'affluence :"),
+  ask: L3("Вы в столовой? Отметьте, пожалуйста, какая очередь:", "At the canteen? Please mark how busy it is:",
+          "À la cantine ? Indiquez l'affluence, s'il vous plaît :"),
+  last: s => s < 60 ? L3("Последняя отметка: только что", "Last mark: just now", "Dernier avis : à l'instant")
+    : L3(`Последняя отметка: ${Math.floor(s / 60)} мин назад`, `Last mark: ${Math.floor(s / 60)} min ago`,
+         `Dernier avis : il y a ${Math.floor(s / 60)} min`),
   levels: [["🟢", L3("Свободно", "Quiet", "Calme")], ["🟡", L3("Очередь", "Some queue", "File d'attente")],
            ["🔴", L3("Битком", "Packed", "Bondé")]],
   none: L3("Пока никто не отметил", "No one has marked it yet", "Personne n'a encore indiqué"),
@@ -507,7 +513,7 @@ async function cnApi(body) {
     method: "POST", headers: { "X-Init-Data": tg.initData, "Content-Type": "application/json" }, body: JSON.stringify(body),
   } : { headers: { "X-Init-Data": tg.initData } });
   if (!r.ok) throw new Error(r.status);
-  return r.json();
+  return { ...(await r.json()), got: Date.now() };
 }
 function cnRender(pop) {
   const box = document.getElementById("canteen");
@@ -519,6 +525,7 @@ function cnRender(pop) {
   now.textContent = canteen.level === null ? "⚪" : CN.levels[canteen.level][0];
   if (pop) { now.classList.add("pop"); setTimeout(() => now.classList.remove("pop"), 250); }
   document.getElementById("cn-sub").textContent = canteen.votes ? CN.votes(canteen.votes, canteen.window) : CN.none;
+  cnLast();
   document.getElementById("cn-row").innerHTML = CN.levels.map(([ico, name], i) =>
     `<button data-l="${i}" class="${canteen.mine === i ? "on" : ""}"><span>${ico}</span>${esc(name)}</button>`).join("");
   document.querySelectorAll("#cn-row button").forEach(b => b.onclick = async () => {
@@ -527,9 +534,16 @@ function cnRender(pop) {
     catch (e) {}
   });
 }
+// насколько свежие данные: считаем от ответа сервера и тикаем сами, не дожидаясь следующего запроса
+function cnLast() {
+  const el = document.getElementById("cn-last");
+  if (!canteen || canteen.last === null || canteen.last === undefined) { el.textContent = ""; return; }
+  el.textContent = CN.last(canteen.last + Math.floor((Date.now() - canteen.got) / 1000));
+}
+setInterval(() => { if (canteen && !document.hidden) cnLast(); }, 15000);
 async function cnLoad() {
   clearTimeout(cnTimer);
-  if (!document.hidden) { try { canteen = await cnApi(); cnRender(); } catch (e) {} }  // сервер не ответил — карточки нет
+  if (!document.hidden) { try { canteen = await cnApi(); cnRender(); } catch (e) {} }  // сервер не ответил — карточки нет  // сервер не ответил — карточки нет
   cnTimer = setTimeout(cnLoad, 30000);
 }
 if (tg && tg.initData) {

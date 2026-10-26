@@ -245,8 +245,10 @@ class Store:
         total = sum(w for _, w in weights)
         avg = sum(v * w for v, w in weights) / total if total else None
         mine = next((r["level"] for r in rows if r["uid"] == uid), None)
+        last = max((r["at"] for r in rows), default=None)
         return {"level": None if avg is None else 0 if avg < 2 / 3 else 1 if avg < 4 / 3 else 2,
-                "votes": len(rows), "mine": mine, "window": CANTEEN_WINDOW // 60}
+                "votes": len(rows), "mine": mine, "window": CANTEEN_WINDOW // 60,
+                "last": None if last is None else max(0, int(now - last))}  # сколько секунд назад последняя отметка
 
     # ---- партии
 
