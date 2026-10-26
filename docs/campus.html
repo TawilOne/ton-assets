@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Карта вуза</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: #000;
+    --surface: #0f0f11;
+    --surface-2: #17171a;
+    --line: rgba(255,255,255,.08);
+    --text: #f5f5f7;
+    --muted: #8a8a93;
+    --red: #ff0000;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); overflow: hidden;
+               font: 15px/1.45 Inter, -apple-system, system-ui, "Segoe UI", Roboto, sans-serif; touch-action: none; }
+  body { display: flex; flex-direction: column;
+         padding: max(12px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom)); }
+  .top { flex: 0 0 auto; display: flex; align-items: center; gap: 12px; margin: 2px 0 12px; }
+  .back { flex: 0 0 auto; width: 40px; height: 40px; border-radius: 14px; border: 1px solid var(--line);
+          background: var(--surface-2); color: var(--text); font-size: 20px; }
+  h1 { margin: 0; font-size: 24px; font-weight: 800; letter-spacing: -.02em; }
+  .sub { color: var(--muted); font-size: 13px; }
+  .stage { position: relative; flex: 1 1 0; min-height: 110px; border-radius: 20px; overflow: hidden;
+           border: 1px solid var(--line); background: #070708; }
+  .inner { position: absolute; left: 0; top: 0; transform-origin: 0 0; will-change: transform; }
+  .inner svg { display: block; width: 100%; height: 100%; }
+  .zoom { position: absolute; right: 10px; bottom: 10px; display: flex; flex-direction: column; gap: 6px; }
+  .stage.low .zoom { flex-direction: row; }
+  .zoom button { width: 40px; height: 40px; border-radius: 13px; border: 1px solid var(--line);
+                 background: rgba(23,23,26,.88); color: var(--text); font-size: 18px;
+                 backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+  .chips { flex: 0 0 auto; display: flex; gap: 8px; overflow-x: auto; margin-top: 12px; padding-bottom: 2px; scrollbar-width: none; }
+  .chips::-webkit-scrollbar { display: none; }
+  .chip { flex: 0 0 auto; padding: 8px 14px; border-radius: 999px; border: 1px solid var(--line);
+          background: var(--surface-2); color: var(--text); font: 600 14px Inter, system-ui, sans-serif; }
+  .chip.on { background: var(--red); border-color: var(--red); }
+  /* карта территории (plans/campus.svg, собирается floorplans/campus.py) */
+  .campus-svg .road { fill: #19191e; }
+  .campus-svg .road-lbl { font: 600 13px Inter, system-ui, sans-serif; fill: #55555f; text-anchor: middle; dominant-baseline: central; }
+  .campus-svg .parking { fill: #121216; }
+  .campus-svg .stall { stroke: #26262d; stroke-width: .8; fill: none; }
+  .campus-svg .garden { fill: #0c160f; }
+  .campus-svg .tree { fill: #13261a; }
+  .campus-svg .walk { stroke: #24242b; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+  .campus-svg .bld { fill: #1d1d24; stroke: #6e6e7c; stroke-width: 2; stroke-linejoin: round; transition: fill .3s, stroke .3s; }
+  .campus-svg .bld.on { fill: rgba(255,0,0,.28); stroke: #ff3030; }
+  .campus-svg .gallery { fill: #2a2a33; stroke: #6e6e7c; stroke-width: 1; }
+  .campus-svg .gallery-open { fill: #2a2a33; stroke: none; }
+  .campus-svg .entry { fill: none; stroke: #ff3030; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .campus-svg .lbl { font: 600 19px Inter, system-ui, sans-serif; fill: #9a9aa6; text-anchor: middle; dominant-baseline: central; }
+  .campus-svg .lbl.on { fill: #fff; }
+  .campus-svg .lbl.small { font-size: 15px; text-anchor: start; fill: #ff6060; }
+  /* план здания — панель снизу, открывается нажатием на здание */
+  /* панель — под картой, в общем потоке: карта над ней уменьшается и не перекрывается */
+  .sheet { display: none; flex: 0 0 auto; flex-direction: column; margin-top: 12px;
+           padding: 14px; border-radius: 20px; background: var(--surface); border: 1px solid var(--line); }
+  .sheet.open { display: flex; animation: up .25s ease; }
+  @keyframes up { from { transform: translateY(16px); opacity: 0; } to { transform: none; opacity: 1; } }
+  .sheet-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .sheet-head h2 { margin: 0; font-size: 19px; font-weight: 800; flex: 1 1 auto; }
+  .sheet-head span { color: var(--muted); font-size: 13px; }
+  .close { width: 34px; height: 34px; border-radius: 11px; border: 1px solid var(--line); background: var(--surface-2);
+           color: var(--text); font-size: 16px; flex: 0 0 auto; }
+  .ftabs { display: flex; gap: 6px; overflow-x: auto; margin-bottom: 10px; scrollbar-width: none; touch-action: pan-x; }
+  .ftabs::-webkit-scrollbar { display: none; }
+  .ftab { flex: 0 0 auto; min-width: 40px; height: 36px; padding: 0 10px; border-radius: 11px; border: 1px solid var(--line);
+          background: var(--surface-2); color: var(--muted); font: 700 15px Inter, system-ui, sans-serif; }
+  .ftab.on { background: #fff; color: #000; }
+  /* план — как в «Где пара»: весь этаж по ширине, «+» или два пальца — крупно, с номерами */
+  .plan-wrap { position: relative; flex: 0 0 auto; }
+  .plan { overflow: auto; border-radius: 16px; border: 1px solid var(--line); background: #070708; touch-action: pan-x pan-y;
+          -webkit-overflow-scrolling: touch; scrollbar-width: none; max-height: 38vh; }
+  .plan::-webkit-scrollbar { display: none; }
+  .plan-inner { width: 100%; transition: width .35s ease; }
+  .plan.big .plan-inner { width: 320%; }
+  .plan .floor-svg .num { opacity: 0; transition: opacity .3s; }
+  .plan.big .floor-svg .num { opacity: 1; }
+  .plan .floor-svg .leaf { display: none; }
+  .plan.big .floor-svg .leaf { display: inline; }
+  .pzoom { position: absolute; right: 10px; bottom: 10px; width: 36px; height: 36px; border-radius: 12px;
+           border: 1px solid var(--line); background: rgba(23,23,26,.85); color: var(--text); font-size: 17px;
+           backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 8px; }
+  .sheet-head, .ftabs, .hint { flex: 0 0 auto; }
+  .noplan { color: var(--muted); padding: 22px 4px; text-align: center; }
+  /* схема этажа (plans/*.svg) — те же цвета, что в «Где пара» */
+  .floor-svg { display: block; width: 100%; height: auto; }
+  .floor-svg .wall { fill: none; stroke: #7a7a88; stroke-width: 6; stroke-linejoin: round; }
+  .floor-svg .base { fill: #101014; stroke: none; }
+  .floor-svg .hall { fill: #26262e; }
+  .floor-svg .block { fill: #111115; stroke: #5a5a67; stroke-width: 1.5; }
+  .floor-svg .room { fill: #131317; stroke: #5a5a67; stroke-width: 1.5; }
+  .floor-svg .door { fill: none; stroke: #26262e; stroke-width: 3; stroke-linecap: butt; }
+  .floor-svg .leaf { fill: none; stroke: #5a5a67; stroke-width: .8; }
+  .floor-svg .stair { fill: #24242c; stroke: #4a4a56; stroke-width: 1; }
+  .floor-svg .lift { fill: #1a1a20; stroke: #4a4a56; stroke-width: 1; }
+  .floor-svg .steps { fill: none; stroke: #4e4e5a; stroke-width: .9; }
+  .floor-svg .num { font-family: Inter, system-ui, sans-serif; font-weight: 600; fill: #b4b4c0;
+                    text-anchor: middle; dominant-baseline: central; }
+  .empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="top">
+  <button class="back" id="back" aria-label="Назад">‹</button>
+  <div><h1 id="title">Карта вуза</h1><div class="sub" id="sub">Двор и корпуса · двумя пальцами — увеличить</div></div>
+</div>
+<div class="stage" id="stage">
+  <div class="inner" id="inner"><div class="empty">…</div></div>
+  <div class="zoom"><button id="zin" aria-label="+">+</button><button id="zout" aria-label="−">−</button><button id="zreset" aria-label="⟲">⟲</button></div>
+</div>
+<div class="chips" id="chips"></div>
+<div class="sheet" id="sheet">
+  <div class="sheet-head"><h2 id="sheet-t"></h2><span id="sheet-f"></span><button class="close" id="close" aria-label="×">✕</button></div>
+  <div class="ftabs" id="ftabs"></div>
+  <div class="plan-wrap"><div class="plan" id="plan"></div><button class="pzoom" id="pzoom" aria-label="+">+</button></div>
+  <div class="hint" id="hint"></div>
+</div>
+
+<script>
+const tg = window.Telegram && window.Telegram.WebApp;
+if (tg) {
+  tg.ready(); tg.expand();
+  try { tg.setHeaderColor("#000000"); tg.setBackgroundColor("#000000"); } catch (e) {}
+}
+const params = new URLSearchParams(location.search);
+const LANG = ["en", "fr"].includes(params.get("lg")) ? params.get("lg") : "ru";
+const L3 = (ru, en, fr) => (LANG === "en" ? en : LANG === "fr" ? fr : ru);
+document.getElementById("title").textContent = L3("Карта вуза", "Campus map", "Plan du campus");
+document.getElementById("sub").textContent = L3("Двор и корпуса · двумя пальцами — увеличить",
+  "Grounds and buildings · pinch to zoom", "Cour et bâtiments · pincez pour zoomer");
+const NAMES = {
+  main: L3("Главный корпус", "Main building", "Bâtiment principal"),
+  k2: L3("2 корпус", "Building 2", "Bâtiment 2"),
+  dk: L3("ДК", "Culture centre", "Maison de la culture"),
+  lib: L3("Библиотека", "Library", "Bibliothèque"),
+};
+
+// назад — к расписанию (кнопка на странице и системная «Назад» в Telegram)
+const goBack = () => {
+  try { tg && tg.BackButton && tg.BackButton.hide(); } catch (e) {}  // в «Где пара» снова «Закрыть»
+  if (history.length > 1) history.back(); else location.href = "index.html" + location.search;
+};
+document.getElementById("back").onclick = goBack;
+if (tg && tg.BackButton) { tg.BackButton.show(); tg.BackButton.onClick(goBack); }
+
+const stage = document.getElementById("stage"), inner = document.getElementById("inner");
+let svgW = 700, svgH = 770, base = 1, s = 1, tx = 0, ty = 0, selected = params.get("b") || "";
+
+function fit() {  // вся карта целиком посередине
+  const W = stage.clientWidth, H = stage.clientHeight;
+  stage.classList.toggle("low", H < 180);  // карта низкая (открыт план) — кнопки «+ − ⟲» в ряд
+  base = Math.min(W / svgW, H / svgH);
+  inner.style.width = svgW * base + "px"; inner.style.height = svgH * base + "px";
+  s = 1; tx = (W - svgW * base) / 2; ty = (H - svgH * base) / 2; apply();
+}
+function clamp() {  // карту нельзя утащить за край целиком
+  const W = stage.clientWidth, H = stage.clientHeight, w = svgW * base * s, h = svgH * base * s;
+  tx = w <= W ? (W - w) / 2 : Math.min(0, Math.max(W - w, tx));
+  ty = h <= H ? (H - h) / 2 : Math.min(0, Math.max(H - h, ty));
+}
+function apply() { clamp(); inner.style.transform = `translate(${tx}px, ${ty}px) scale(${s})`; }
+function zoomAt(k, cx, cy) {  // увеличить в k раз вокруг точки (cx, cy) внутри карты
+  const ns = Math.min(6, Math.max(1, s * k)); k = ns / s;
+  tx = cx - (cx - tx) * k; ty = cy - (cy - ty) * k; s = ns; apply();
+}
+const mid = () => [stage.clientWidth / 2, stage.clientHeight / 2];
+document.getElementById("zin").onclick = () => zoomAt(1.6, ...mid());
+document.getElementById("zout").onclick = () => zoomAt(1 / 1.6, ...mid());
+document.getElementById("zreset").onclick = fit;
+
+// один палец — двигать, два — увеличивать
+const pts = new Map(); let last = null, tap = null;
+const local = e => { const r = stage.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+function gesture() {
+  const p = [...pts.values()];
+  if (p.length === 1) return { x: p[0][0], y: p[0][1], d: 0 };
+  return { x: (p[0][0] + p[1][0]) / 2, y: (p[0][1] + p[1][1]) / 2, d: Math.hypot(p[0][0] - p[1][0], p[0][1] - p[1][1]) };
+}
+stage.addEventListener("pointerdown", e => {
+  if (e.target.closest("button")) return;
+  stage.setPointerCapture(e.pointerId); pts.set(e.pointerId, local(e)); last = gesture();
+  tap = pts.size === 1 ? [e.clientX, e.clientY] : null;
+});
+stage.addEventListener("pointermove", e => {
+  if (!pts.has(e.pointerId)) return;
+  pts.set(e.pointerId, local(e)); const g = gesture();
+  if (pts.size > 1) tap = null;
+  if (last && pts.size === (last.d ? 2 : 1)) {
+    if (g.d && last.d) zoomAt(g.d / last.d, g.x, g.y);
+    tx += g.x - last.x; ty += g.y - last.y; apply();
+  }
+  last = g;
+});
+const up = e => {
+  // короткое касание без сдвига — выбрать здание под пальцем
+  if (tap && pts.size === 1 && Math.hypot(e.clientX - tap[0], e.clientY - tap[1]) < 8) {
+    stage.releasePointerCapture(e.pointerId);
+    const el = document.elementFromPoint(e.clientX, e.clientY), b = el && el.closest("[data-b]");
+    if (b) select(b.dataset.b);
+  }
+  if (pts.size > 1) tap = null;
+  pts.delete(e.pointerId); last = pts.size ? gesture() : null;
+};
+stage.addEventListener("pointerup", up); stage.addEventListener("pointercancel", up);
+stage.addEventListener("wheel", e => { e.preventDefault(); zoomAt(e.deltaY < 0 ? 1.15 : 1 / 1.15, ...local(e)); }, { passive: false });
+for (const ev of ["gesturestart", "gesturechange"]) document.addEventListener(ev, e => e.preventDefault(), { passive: false });
+window.addEventListener("resize", fit);
+if (window.ResizeObserver) new ResizeObserver(() => fit()).observe(stage);  // открыли/закрыли план — карта подстраивается
+
+// ---- план здания по нажатию
+let plans = {}, floorShown = {}, wantFloor = parseFloat(params.get("f"));
+const svgCache = {};
+fetch("plans.json", { cache: "no-store" }).then(r => r.json()).then(j => { plans = j; if (selected && sheet.classList.contains("open")) openSheet(selected); }).catch(() => {});
+const PLAN_OF = { main: "main", k2: "k2" };  // у каких зданий есть поэтажные схемы
+const floorsOf = b => Object.keys(plans).filter(k => k.startsWith(b + "-")).map(k => +k.split("-")[1])
+  .filter(n => !isNaN(n)).sort((a, c) => a - c);  // слева направо по возрастанию: Ц, 1, 1½, 2…
+const floorName = n => n === 1.5 ? L3("между 1 и 2 этажом", "mezzanine", "entresol")
+  : n === 0 ? L3("цокольный этаж", "lower ground floor", "demi-sous-sol") : L3(`${n} этаж`, `floor ${n}`, `étage ${n}`);
+const sheet = document.getElementById("sheet");
+document.getElementById("close").onclick = () => { if (selected) select(selected); };
+// увеличение плана — как на основной карте «Где пара»
+let planZoom = false;
+const planEl = document.getElementById("plan"), pzoom = document.getElementById("pzoom");
+function setPlanZoom(on) {
+  planZoom = on;
+  planEl.classList.toggle("big", on);
+  pzoom.textContent = on ? "−" : "+";
+  if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred("light");
+  setTimeout(() => { planEl.scrollLeft = (planEl.scrollWidth - planEl.clientWidth) / 2;
+                     planEl.scrollTop = (planEl.scrollHeight - planEl.clientHeight) / 2; }, 360);
+}
+pzoom.onclick = () => setPlanZoom(!planZoom);
+{ // два пальца на плане: развели — крупно, свели — весь этаж
+  let start = 0, k = 1;
+  const d = t => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+  planEl.addEventListener("touchstart", e => { if (e.touches.length === 2) { start = d(e.touches); k = 1; } }, { passive: true });
+  planEl.addEventListener("touchmove", e => { if (e.touches.length === 2 && start) { e.preventDefault(); k = d(e.touches) / start; } }, { passive: false });
+  planEl.addEventListener("touchend", e => {
+    if (!start || e.touches.length) return;
+    if (k > 1.15 && !planZoom) setPlanZoom(true); else if (k < 0.87 && planZoom) setPlanZoom(false);
+    start = 0;
+  });
+}
+function openSheet(b) {
+  document.getElementById("sheet-t").textContent = NAMES[b];
+  const plan = document.getElementById("plan"), tabs = document.getElementById("ftabs");
+  const fl = PLAN_OF[b] ? floorsOf(PLAN_OF[b]) : [];
+  sheet.classList.add("open");
+  if (!fl.length) {
+    tabs.innerHTML = ""; document.getElementById("sheet-f").textContent = ""; document.getElementById("hint").textContent = "";
+    plan.className = "plan"; pzoom.style.display = "none";
+    plan.innerHTML = `<div class="noplan">${L3("План этого здания пока не добавлен",
+      "The plan of this building has not been added yet", "Le plan de ce bâtiment n'a pas encore été ajouté")}</div>`;
+    return;
+  }
+  let f = floorShown[b];
+  if (f === undefined) f = fl.includes(wantFloor) && b === params.get("b") ? wantFloor : fl.includes(2) ? 2 : fl[0];
+  floorShown[b] = f;
+  tabs.innerHTML = fl.map(n => `<button class="ftab${n === f ? " on" : ""}" data-f="${n}">${n === 1.5 ? "1½" : n === 0 ? "Ц" : n}</button>`).join("");
+  tabs.querySelectorAll(".ftab").forEach(t => t.onclick = () => { floorShown[b] = +t.dataset.f; openSheet(b);
+    if (tg && tg.HapticFeedback) tg.HapticFeedback.selectionChanged(); });
+  const on = tabs.querySelector(".ftab.on");  // выбранный этаж — в зоне видимости ряда кнопок
+  if (on) tabs.scrollLeft = on.offsetLeft - (tabs.clientWidth - on.offsetWidth) / 2;
+  document.getElementById("sheet-f").textContent = floorName(f);
+  document.getElementById("hint").textContent = L3("«+» или два пальца — крупнее, с номерами кабинетов",
+    "Tap + or pinch to zoom in and see room numbers", "Touchez + ou pincez pour agrandir et voir les numéros");
+  plan.className = "plan " + PLAN_OF[b] + (planZoom ? " big" : ""); pzoom.style.display = "";
+  const id = `${PLAN_OF[b]}-${f}`;
+  const show = t => { if (floorShown[b] === f && selected === b) { plan.innerHTML = `<div class="plan-inner">${t}</div>`; } };
+  if (svgCache[id]) show(svgCache[id]);
+  else {
+    plan.innerHTML = `<div class="noplan">…</div>`;
+    fetch(plans[id]).then(r => r.text()).then(t => { svgCache[id] = t; show(t); }).catch(() => {});
+  }
+}
+
+function select(b, open = true) {
+  // нажали на подсвеченное здание: план закрыт — открыть, открыт — закрыть и снять подсветку
+  if (b === selected && open && !sheet.classList.contains("open")) { openSheet(b); return; }
+  selected = selected === b ? "" : b;
+  if (selected && open) openSheet(selected); else sheet.classList.remove("open");
+  inner.querySelectorAll("[data-b]").forEach(el => el.classList.toggle("on", el.dataset.b === selected));
+  document.querySelectorAll(".chip").forEach(c => c.classList.toggle("on", c.dataset.b === selected));
+  if (tg && tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
+}
+document.getElementById("chips").innerHTML = Object.entries(NAMES)
+  .map(([b, n]) => `<button class="chip" data-b="${b}">${n}</button>`).join("");
+document.querySelectorAll(".chip").forEach(c => c.onclick = () => select(c.dataset.b));
+
+fetch("plans/campus.svg?v=1", { cache: "no-store" }).then(r => r.text()).then(t => {
+  inner.innerHTML = t;
+  const vb = (inner.querySelector("svg").getAttribute("viewBox") || "").split(/\s+/).map(Number);
+  if (vb.length === 4) { svgW = vb[2]; svgH = vb[3]; }
+  fit();
+  const b = selected; selected = ""; if (b && NAMES[b]) select(b, false);  // корпус пары — только подсветить
+}).catch(() => {
+  inner.innerHTML = `<div class="empty">${L3("Не удалось загрузить карту", "Could not load the map", "Impossible de charger le plan")}</div>`;
+});
+</script>
+</body>
+</html>
