@@ -51,11 +51,14 @@ GROUPS_JSON = {"faculties": [
 class Msg:
     def __init__(self, text=""):
         self.text = text
-        self.caption, self.photo = None, ()
+        self.caption, self.photo, self.media_group_id, self.message_id = None, (), None, 1
         self.sent = []
 
     async def reply_photo(self, photo, **kw):
         self.sent.append((("photo", photo), kw))
+
+    async def reply_media_group(self, media, **kw):
+        self.sent.append((("album", [(m.media, m.caption) for m in media]), kw))
 
     async def reply_text(self, text, **kw):
         self.sent.append((text, kw))
@@ -1380,3 +1383,39 @@ def test_bot_tells_waiting_player_the_game_started(env, monkeypatch, tmp_path):
     (chat, text, btn), = sent
     assert chat == 1 and "Соперник нашёлся: Мария Т." in text and btn.text == "♟ К партии"
     assert f"games.html?g={gid}" in btn.web_app.url
+
+
+def test_broadcast_album_of_two_photos(env, monkeypatch):
+    """Альбом из двух фото, /broadcast в подписи первого: бот собирает обе картинки и рассылает альбомом."""
+    monkeypatch.setattr(bot, "_admin_id", lambda: 99)
+    bot.USERS_FILE.write_text(json.dumps({"1": {"name": "a"}}), encoding="utf-8")
+    c = ctx()
+    c.job_queue = None  # в тесте «ждём остальные картинки» вызываем сами
+    first, second = update(uid=99), update(uid=99)
+    for u, mid, fid, cap in ((first, 10, "p1", "/broadcast Нас 500!"), (second, 11, "p2", None)):
+        m = u.effective_message
+        m.text, m.caption, m.media_group_id, m.message_id = None, cap, "album1", mid
+        m.photo = (Obj(file_id=fid + "-small"), Obj(file_id=fid))
+    run(bot.on_admin_photo(second, c))  # картинки могут прийти в любом порядке
+    run(bot.on_admin_photo(first, c))
+    run(bot._album_done(c, "album1"))
+    (preview, _), (ask, kw) = first.effective_message.sent
+    assert preview == ("album", [("p1", "Нас 500!"), ("p2", None)]) and "с 2 картинками" in ask
+    sent = []
+
+    async def send_media_group(chat, media, **kw):
+        sent.append((chat, [(m.media, m.caption) for m in media]))
+    q = update(uid=99, data="bc:send")
+    c.bot = Obj(send_media_group=send_media_group)
+    run(bot.on_broadcast(q, c))
+    assert sent == [(1, [("p1", "Нас 500!"), ("p2", None)])]
+
+    u = update(uid=99)  # альбом без /broadcast — не рассылка
+    u.effective_message.media_group_id, u.effective_message.photo = "album2", (Obj(file_id="x"),)
+    run(bot.on_admin_photo(u, c))
+    run(bot._album_done(c, "album2"))
+    assert u.effective_message.sent == []
+    u = update(uid=5)  # картинки не от админа — бот их не трогает
+    u.effective_message.caption, u.effective_message.photo = "/broadcast взлом", (Obj(file_id="x"),)
+    run(bot.on_admin_photo(u, c))
+    assert u.effective_message.sent == [] and "broadcast" not in c.bot_data

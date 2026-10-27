@@ -1350,7 +1350,8 @@ BROADCAST_HELP = (
     "/broadcast Текст объявления\n\n"
     "Можно добавить переводы — тем, у кого выбран английский или французский, придёт свой вариант:\n\n"
     "/broadcast Текст по-русски\n---en---\nText in English\n---fr---\nTexte en français\n\n"
-    "С картинкой: отправьте картинку, а в подписи к ней напишите /broadcast Текст (до 1024 знаков).\n\n"
+    "С картинкой: отправьте картинку, а в подписи к ней напишите /broadcast Текст (до 1024 знаков). "
+    "Можно и несколько картинок сразу (до 10) — альбомом, подпись /broadcast — у любой из них.\n\n"
     "Сначала бот покажет, как будет выглядеть сообщение, и спросит подтверждение. "
     "Вместе с сообщением у каждого обновится нижняя панель кнопок — /start нажимать не нужно."
 )
@@ -1370,29 +1371,75 @@ async def cmd_broadcast(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     msg = update.effective_message
     # команда может быть и подписью к картинке — тогда рассылаем картинку с этой подписью
-    raw = (msg.text or msg.caption or "").split(maxsplit=1)
-    photo = msg.photo[-1].file_id if msg.photo else None
+    await _broadcast_prepare(msg, ctx, msg.text or msg.caption or "", [msg.photo[-1].file_id] if msg.photo else [])
+
+
+def _album(photos: list[str], caption: str) -> list:
+    """Альбом для Telegram: подпись — у первой картинки (так её показывает Telegram под альбомом)."""
+    from telegram import InputMediaPhoto
+    return [InputMediaPhoto(p, caption=caption if i == 0 else None) for i, p in enumerate(photos)]
+
+
+async def _broadcast_prepare(msg, ctx: ContextTypes.DEFAULT_TYPE, raw_text: str, photos: list[str]) -> None:
+    """Предпросмотр рассылки и вопрос «Отправить?». photos — 0, 1 или альбом до 10 картинок."""
+    raw = raw_text.split(maxsplit=1)
     texts = _parse_broadcast(raw[1]) if len(raw) > 1 else {}
     if not texts.get("ru"):
         await msg.reply_text(BROADCAST_HELP)
         return
-    if photo and any(len(t) > 1024 for t in texts.values()):  # у подписи к картинке в Telegram предел 1024 знака
+    if photos and any(len(t) > 1024 for t in texts.values()):  # у подписи к картинке в Telegram предел 1024 знака
         await msg.reply_text("Подпись к картинке длиннее 1024 знаков — Telegram такую не пропустит. "
                              "Сократите текст или отправьте картинку и текст отдельно.")
         return
-    ctx.bot_data["broadcast"], ctx.bot_data["broadcast_photo"] = texts, photo
+    ctx.bot_data["broadcast"], ctx.bot_data["broadcast_photos"] = texts, photos[:10]
     n = len(_load_users())
     for lang in i18n.LANGS:  # предпросмотр каждого варианта
         if lang in texts:
-            if photo:
-                await msg.reply_photo(photo, caption=texts[lang])
+            if len(photos) > 1:
+                await msg.reply_media_group(_album(photos[:10], texts[lang]))
+            elif photos:
+                await msg.reply_photo(photos[0], caption=texts[lang])
             else:
                 await msg.reply_text(f"Предпросмотр ({i18n.LANG_NAMES[lang]}):\n\n{texts[lang]}")
+    what = f" с {len(photos[:10])} картинками" if len(photos) > 1 else " с картинкой" if photos else ""
     await msg.reply_text(
-        f"Отправить это{' с картинкой' if photo else ''} {n} пользователям? "
-        "Без перевода английским и французским придёт русский вариант.",
+        f"Отправить это{what} {n} пользователям? Без перевода английским и французским придёт русский вариант.",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(f"✅ Отправить всем ({n})", callback_data="bc:send"),
                                             InlineKeyboardButton("✖️ Отмена", callback_data="bc:cancel")]]))
+
+
+ALBUM_WAIT = 2.0  # альбом Telegram присылает пачкой отдельных сообщений — ждём, пока придут все картинки
+
+
+async def on_admin_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Картинки от администратора: одна с подписью /broadcast — рассылка; альбом (2–10 фото) — собираем все
+    его картинки (подпись обычно только у первой) и через пару секунд запускаем рассылку альбомом."""
+    msg = update.effective_message
+    if update.effective_user.id != _admin_id() or not msg.photo:
+        return
+    if not msg.media_group_id:
+        if re.match(r"^/broadcast(@\w+)?(\s|$)", msg.caption or ""):
+            await cmd_broadcast(update, ctx)
+        return
+    albums = ctx.bot_data.setdefault("albums", {})
+    a = albums.setdefault(msg.media_group_id, {"msg": msg, "photos": [], "caption": ""})
+    a["photos"].append((msg.message_id, msg.photo[-1].file_id))
+    if msg.caption and not a["caption"]:
+        a["caption"], a["msg"] = msg.caption, msg
+    if len(a["photos"]) == 1 and ctx.job_queue:  # первая картинка альбома — ждём остальные
+        ctx.job_queue.run_once(_album_job, ALBUM_WAIT, data=msg.media_group_id)
+
+
+async def _album_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    await _album_done(ctx, ctx.job.data)
+
+
+async def _album_done(ctx: ContextTypes.DEFAULT_TYPE, group_id: str) -> None:
+    a = ctx.bot_data.get("albums", {}).pop(group_id, None)
+    if not a or not re.match(r"^/broadcast(@\w+)?(\s|$)", a["caption"]):
+        return  # альбом без /broadcast в подписи — это не рассылка
+    photos = [f for _, f in sorted(a["photos"])]  # в том порядке, как в альбоме
+    await _broadcast_prepare(a["msg"], ctx, a["caption"], photos)
 
 
 async def on_broadcast(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1400,7 +1447,7 @@ async def on_broadcast(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await q.answer()
     if update.effective_user.id != _admin_id():
         return
-    texts, photo = ctx.bot_data.pop("broadcast", None), ctx.bot_data.pop("broadcast_photo", None)
+    texts, photos = ctx.bot_data.pop("broadcast", None), ctx.bot_data.pop("broadcast_photos", None) or []
     if q.data != "bc:send" or not texts:
         await q.edit_message_text("Рассылка отменена.")
         return
@@ -1408,18 +1455,21 @@ async def on_broadcast(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     ok = fail = 0
     for uid in list(_load_users()):
         lang = i18n.get_lang(uid)
-        try:  # вместе с сообщением — новая нижняя панель на языке пользователя
-            if photo:
-                await ctx.bot.send_photo(int(uid), photo, caption=texts.get(lang) or texts["ru"], reply_markup=keyboard(lang))
+        text = texts.get(lang) or texts["ru"]
+        try:  # вместе с сообщением — новая нижняя панель на языке пользователя (у альбома кнопок не бывает)
+            if len(photos) > 1:
+                await ctx.bot.send_media_group(int(uid), _album(photos, text))
+            elif photos:
+                await ctx.bot.send_photo(int(uid), photos[0], caption=text, reply_markup=keyboard(lang))
             else:
-                await ctx.bot.send_message(int(uid), texts.get(lang) or texts["ru"], reply_markup=keyboard(lang))
+                await ctx.bot.send_message(int(uid), text, reply_markup=keyboard(lang))
             ok += 1
         except Forbidden:  # заблокировал бота или удалил аккаунт
             _mark_blocked(uid, True)
             fail += 1
         except Exception:
             fail += 1
-        await asyncio.sleep(0.05)  # Telegram ограничивает ~30 сообщений в секунду
+        await asyncio.sleep(0.05 * max(1, len(photos)))  # Telegram ограничивает ~30 сообщений в секунду
     await q.edit_message_text(f"✅ Разослано: {ok}" + (f"\nНе доставлено: {fail} (заблокировали бота)" if fail else ""))
 
 
@@ -1675,7 +1725,7 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(on_group, pattern=r"^grp:"))
     app.add_handler(CommandHandler("untranslated", cmd_untranslated))
     app.add_handler(CommandHandler("broadcast", cmd_broadcast))
-    app.add_handler(MessageHandler(filters.PHOTO & filters.CaptionRegex(r"^/broadcast(@\w+)?(\s|$)"), cmd_broadcast))
+    app.add_handler(MessageHandler(filters.PHOTO, on_admin_photo))  # /broadcast подписью к фото или к альбому
     app.add_handler(CallbackQueryHandler(on_broadcast, pattern=r"^bc:"))
     app.add_handler(CommandHandler("myid", cmd_myid))
     app.add_handler(CommandHandler("users", cmd_users))
