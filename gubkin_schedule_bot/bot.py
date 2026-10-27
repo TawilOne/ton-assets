@@ -56,7 +56,7 @@ from schedule import (_minutes, fetch_range, locate_room, semester_bounds, slim_
 MSK = ZoneInfo("Europe/Moscow")
 GROUP_CODE = normalize_code(os.environ.get("GROUP_CODE", "ГМ-26-11"))
 FACULTY_HINT = os.environ.get("FACULTY_HINT", "геолог")
-TG_LIMIT = 4000
+TG_LIMIT = 4090  # у Telegram предел 4096 видимых знаков (UTF-16) — длину считает _visible_len
 MORNING = dt.time(7, 0, tzinfo=MSK)  # время утренней рассылки
 SUBSCRIBERS_FILE = pathlib.Path(os.environ.get("SUBSCRIBERS_FILE", "subscribers.json"))
 
@@ -400,19 +400,63 @@ def _ago(seconds: float | None, lang: str = "ru") -> str:
     return i18n.days_ago(hours // 24, lang)
 
 
-def _split(text: str) -> list[str]:
-    """Режет длинный текст по переносам строк (Telegram ограничивает длину сообщения)."""
-    parts = []
-    while text:
-        cut = len(text) if len(text) <= TG_LIMIT else text.rfind("\n", 0, TG_LIMIT) + 1 or TG_LIMIT
-        parts.append(text[:cut])
-        text = text[cut:]
+DAY_RULE = "━━━━━━━━━━━━━━"  # черта между днями в расписании (schedule.to_html)
+
+
+def _visible_len(line: str, html: bool) -> int:
+    """Длина строки так, как её считает Telegram: без тегов (<b>, ссылки на преподавателей), &lt; — один знак,
+    эмодзи — два (Telegram считает в UTF-16)."""
+    if html:
+        line = re.sub(r"&(?:lt|gt|amp|quot);", "_", re.sub(r"<[^>]+>", "", line))
+    return len(line.encode("utf-16-le")) // 2
+
+
+def _split(text: str, html: bool = False) -> list[str]:
+    """Режет длинный текст на сообщения (у Telegram предел ~4096 видимых знаков). Влезает — одно сообщение.
+    Не влезает — режем между днями, если день сам слишком длинный — между парами (по пустой строке),
+    и только в крайнем случае — по строке. Каждая строка расписания — законченный HTML, так что теги не рвутся."""
+    lines = text.split("\n")
+    if sum(_visible_len(l, html) + 1 for l in lines) <= TG_LIMIT:
+        return [text] if text else []
+    parts, cur, size = [], [], 0
+
+    def flush():
+        while cur and cur[-1].strip() in ("", DAY_RULE):  # хвост из пустых строк и черты не нужен
+            cur.pop()
+        if cur:
+            parts.append("\n".join(cur))
+        cur.clear()
+
+    i = 0
+    while i < len(lines):
+        # блок до следующей границы: день (до черты), а если не влезает — пара (до пустой строки)
+        j = next((k for k in range(i + 1, len(lines)) if lines[k] == DAY_RULE), len(lines))
+        block = lines[i:j]
+        if sum(_visible_len(l, html) + 1 for l in block) > TG_LIMIT:
+            j = next((k for k in range(i + 1, len(lines)) if lines[k] == ""), len(lines))
+            block = lines[i:j]
+            if sum(_visible_len(l, html) + 1 for l in block) > TG_LIMIT:
+                block, j = lines[i:i + 1], i + 1
+        bsize = sum(_visible_len(l, html) + 1 for l in block)
+        if cur and size + bsize > TG_LIMIT:
+            flush()
+            size = 0
+            while block and block[0].strip() in ("", DAY_RULE):  # новое сообщение не начинаем с черты
+                block = block[1:]
+            bsize = sum(_visible_len(l, html) + 1 for l in block)
+        if not cur:
+            while block and block[0].strip() in ("", DAY_RULE):
+                block = block[1:]
+        cur.extend(block)
+        size += bsize
+        i = j
+    flush()
     return parts
 
 
 async def _send_text(update: Update, text: str, html: bool = False) -> None:
     kb = keyboard(_lang(update))
-    for part in _split(text):
+    for part in _split(text, html):
         await update.effective_message.reply_text(part, parse_mode="HTML" if html else None, reply_markup=kb,
                                                   disable_web_page_preview=True)  # ссылки на преподавателей — без карточек
 
@@ -848,7 +892,7 @@ async def digest_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if texts[key] is None:
             continue
         try:
-            for part in _split(texts[key]):
+            for part in _split(texts[key], html=True):
                 await ctx.bot.send_message(int(chat_id), part, parse_mode="HTML", disable_web_page_preview=True)
         except Forbidden:  # пользователь заблокировал бота
             _mark_blocked(chat_id, True)

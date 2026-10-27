@@ -1332,3 +1332,28 @@ def test_broadcast_with_photo(env, monkeypatch):
     u.effective_message.photo = (Obj(file_id="big"),)
     run(bot.cmd_broadcast(u, ctx()))
     assert "1024" in u.effective_message.sent[0][0]
+
+
+def test_week_fits_one_message_and_splits_between_days(monkeypatch):
+    """Длину считаем как Telegram — по видимому тексту (ссылки на преподавателей длинные, но не видны):
+    обычная неделя — одно сообщение. Не влезает — режем между днями, а не посреди пары."""
+    import schedule
+    from schedule import Lesson
+    monkeypatch.setattr(schedule, "TEACHER_LINK", "https://t.me/gubkin_test_bot?start=t_")
+    mon = dt.date(2026, 10, 26)
+
+    def week(per_day):
+        return [Lesson(date=(mon + dt.timedelta(days=d)).isoformat(), weekday="", start=f"{8 + 2 * k:02d}:45",
+                       end=f"{10 + 2 * k:02d}:15", subject="Профессионально-личностное саморазвитие",
+                       kind="Лабораторная работа", subgroup="1", room=f"{400 + k}",
+                       teacher="Константинопольская Екатерина Владимировна") for d in range(6) for k in range(per_day)]
+    html = schedule.to_html(week(3), today=mon)
+    assert len(html) > bot.TG_LIMIT  # с тегами и ссылками — длиннее предела…
+    assert bot._split(html, html=True) == [html]  # …а видимого текста меньше: одним сообщением
+    parts = bot._split(schedule.to_html(week(7), today=mon), html=True)
+    assert len(parts) >= 2
+    for p in parts:
+        assert sum(bot._visible_len(l, True) + 1 for l in p.split("\n")) <= bot.TG_LIMIT
+        assert p.startswith("📅")  # каждое сообщение начинается с дня — пара не разорвана
+        assert not p.rstrip().endswith(bot.DAY_RULE)
+    assert bot._split("коротко") == ["коротко"] and bot._split("") == []
