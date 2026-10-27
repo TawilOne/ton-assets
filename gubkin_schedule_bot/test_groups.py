@@ -1255,7 +1255,7 @@ def test_bot_sends_chess_search_notifications(env, monkeypatch, tmp_path):
     s = games.Store(db)
     s.touch({"id": 1, "first_name": "Иван", "last_name": "Тестов"})
     s.db.execute("INSERT INTO games (id, kind, creator, status, created, updated) VALUES ('g1', 'search', 1, 'wait', 0, 0)")
-    s.db.execute("INSERT INTO outbox VALUES ('g1', 2, ?), ('g1', 3, ?)", (time.time(), time.time()))
+    s.db.execute("INSERT INTO outbox (gid, uid, created) VALUES ('g1', 2, ?), ('g1', 3, ?)", (time.time(), time.time()))
     s.db.commit()
     sent = []
 
@@ -1357,3 +1357,26 @@ def test_week_fits_one_message_and_splits_between_days(monkeypatch):
         assert p.startswith("📅")  # каждое сообщение начинается с дня — пара не разорвана
         assert not p.rstrip().endswith(bot.DAY_RULE)
     assert bot._split("коротко") == ["коротко"] and bot._split("") == []
+
+
+def test_bot_tells_waiting_player_the_game_started(env, monkeypatch, tmp_path):
+    """Нажал «Найти соперника» и свернул приложение — соперник нашёлся: бот пишет «Партия началась» с кнопкой."""
+    import games
+    db = tmp_path / "games.db"
+    monkeypatch.setattr(bot, "GAMES_DB", db)
+    monkeypatch.setattr(bot, "_games_store", [None])
+    s = games.Store(db)
+    s.touch({"id": 1, "first_name": "Иван", "last_name": "Тестов"})
+    s.touch({"id": 2, "first_name": "Мария", "last_name": "Тестова"})
+    gid = s.create(1, "invite")
+    s.db.execute("UPDATE players SET seen = 0 WHERE id = 1")  # Иван свернул приложение
+    s.db.commit()
+    s.join(2, gid)
+    sent = []
+
+    async def send_message(chat, text, **kw):
+        sent.append((chat, text, kw["reply_markup"].inline_keyboard[0][0]))
+    run(bot.games_notify_job(Obj(bot=Obj(send_message=send_message, username="gubkin_test_bot"))))
+    (chat, text, btn), = sent
+    assert chat == 1 and "Соперник нашёлся: Мария Т." in text and btn.text == "♟ К партии"
+    assert f"games.html?g={gid}" in btn.web_app.url

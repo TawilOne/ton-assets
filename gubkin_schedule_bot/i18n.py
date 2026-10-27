@@ -222,6 +222,10 @@ TEXT = {
                          "To stop these messages, use the 🔔 button in the mini games.",
                    "fr": f"♟ {{who}} cherche un adversaire aux échecs. Une partie{NBSP}?\n\n"
                          f"Pour ne plus recevoir ces messages{NBSP}: bouton 🔔 dans les mini-jeux."},
+    "chess_found": {"ru": "♟ Соперник нашёлся: {who}. Партия началась — заходите!",
+                    "en": "♟ Opponent found: {who}. The game has started — come and play!",
+                    "fr": f"♟ Adversaire trouvé{NBSP}: {{who}}. La partie a commencé, venez jouer{NBSP}!"},
+    "chess_found_btn": {"ru": "♟ К партии", "en": "♟ Open the game", "fr": "♟ Ouvrir la partie"},
     "chess_seek_btn": {"ru": "♟ Играть", "en": "♟ Play", "fr": "♟ Jouer"},
     "teacher_full": {"ru": "👤 Преподаватель:\n<b>{name}</b>", "en": "👤 Teacher:\n<b>{name}</b>",
                      "fr": f"👤 Enseignant{NBSP}:\n<b>{{name}}</b>"},

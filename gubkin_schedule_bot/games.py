@@ -146,7 +146,8 @@ class Store:
         for table, column in (("games", "level INTEGER DEFAULT 0"),  # уровень бота
                               ("players", "photo TEXT DEFAULT ''"),  # аватарка из Telegram (photo_url)
                               ("games", "seen_w REAL DEFAULT 0"), ("games", "seen_b REAL DEFAULT 0"),  # кто когда был в партии
-                              ("players", "notify INTEGER DEFAULT 0")):  # хочет знать, когда кто-то ищет игру
+                              ("players", "notify INTEGER DEFAULT 0"),  # хочет знать, когда кто-то ищет игру
+                              ("outbox", "kind TEXT DEFAULT 'seek'")):  # seek — кто-то ищет; start — соперник нашёлся
             try:  # у старой базы колонки ещё нет
                 self.db.execute(f"ALTER TABLE {table} ADD COLUMN {column}")
             except sqlite3.OperationalError:
@@ -212,17 +213,22 @@ class Store:
         self.db.commit()
 
     def take_outbox(self) -> list[dict]:
-        """Для бота: забрать накопившиеся уведомления. Поиск уже закончился (нашёлся соперник, отменили)
-        или уведомление старше минуты — не шлём."""
+        """Для бота: забрать накопившиеся уведомления. kind: seek — «кто-то ищет игру» (поиск ещё идёт),
+        start — «соперник нашёлся» (партия идёт). Неактуальные и старше минуты — не шлём."""
         now = time.time()
-        rows = self.db.execute("SELECT o.uid, o.gid, g.creator FROM outbox o JOIN games g ON g.id = o.gid "
-                               "WHERE g.status = 'wait' AND g.kind = 'search' AND o.created > ?", (now - 60,)).fetchall()
+        rows = self.db.execute("SELECT o.uid, o.gid, o.kind, g.creator, g.white, g.black FROM outbox o "
+                               "JOIN games g ON g.id = o.gid WHERE o.created > ? AND "
+                               "((o.kind = 'start' AND g.status = 'play') OR "
+                               "(o.kind != 'start' AND g.status = 'wait' AND g.kind = 'search'))", (now - 60,)).fetchall()
         self.db.execute("DELETE FROM outbox")
         self.db.commit()
         out = []
         for r in rows:
-            who = self.player(r["creator"]) or {}
-            out.append({"uid": r["uid"], "gid": r["gid"], "name": who.get("name", ""), "faculty": who.get("faculty", "")})
+            kind = r["kind"] or "seek"
+            other = r["creator"] if kind == "seek" else (r["black"] if r["white"] == r["uid"] else r["white"])
+            who = self.player(other) or {}
+            out.append({"uid": r["uid"], "gid": r["gid"], "kind": kind,
+                        "name": who.get("name", ""), "faculty": who.get("faculty", "")})
         return out
 
     # ---- загруженность столовой: студенты отмечают 🟢🟡🔴, показываем среднее одним значком
@@ -340,9 +346,12 @@ class Store:
         now = time.time()
         # автор приглашения мог давно закрыть приложение: пока он не откроет партию, уход ему не считаем (0)
         p = self.db.execute("SELECT seen FROM players WHERE id = ?", (g["creator"],)).fetchone()
-        seen = {uid: now, g["creator"]: now if p and (p["seen"] or 0) > now - GRACE else 0}
+        here = bool(p and (p["seen"] or 0) > now - GRACE)
+        seen = {uid: now, g["creator"]: now if here else 0}
         self.db.execute("UPDATE games SET white = ?, black = ?, status = 'play', updated = ?, seen_w = ?, seen_b = ? "
                         "WHERE id = ?", (white, black, now, seen[white], seen[black], gid))
+        if not here:  # автор поиска/приглашения свернул приложение — бот напишет ему, что соперник нашёлся
+            self.db.execute("INSERT INTO outbox (gid, uid, created, kind) VALUES (?, ?, ?, 'start')", (gid, g["creator"], now))
         self.db.commit()
         return gid
 

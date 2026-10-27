@@ -481,3 +481,27 @@ def test_canteen_does_not_count_as_being_in_games(store, monkeypatch):
         finally:
             await client.close()
     asyncio.run(go())
+
+
+def test_opponent_found_notification_only_if_away(store, monkeypatch):
+    """«Соперник нашёлся» — только тому, кто свернул приложение; кто смотрит на экран поиска — и так видит."""
+    now = [time.time()]
+    monkeypatch.setattr(games.time, "time", lambda: now[0])
+    gid = store.create(1, "search")
+    store.touch({"id": 1, "first_name": "Иван"})  # Иван на экране поиска
+    store.touch({"id": 2, "first_name": "Мария"})
+    assert store.create(2, "search") == gid
+    assert store.take_outbox() == []
+
+    gid = store.create(1, "invite")
+    now[0] += 3600  # друг открыл ссылку через час — Ивана в приложении нет
+    store.touch({"id": 3, "first_name": "Олег"})
+    store.join(3, gid)
+    out = store.take_outbox()
+    assert [(n["uid"], n["kind"], n["gid"]) for n in out] == [(1, "start", gid)] and out[0]["name"] == "Олег"
+
+    gid = store.create(1, "invite")  # партию успели закончить до отправки — не шлём
+    now[0] += 3600
+    store.join(3, gid)
+    store.resign(3, gid)
+    assert store.take_outbox() == []

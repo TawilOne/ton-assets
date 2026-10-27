@@ -1068,9 +1068,12 @@ async def games_notify_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         uid, lang = n["uid"], i18n.get_lang(n["uid"])
         url = _webapp_base() + "games.html?" + urlencode({"g": n["gid"], "lg": lang, "bot": _bot_username(ctx)})
         who = n["name"] + (f" · {n['faculty']}" if n["faculty"] else "")
+        found = n.get("kind") == "start"  # соперник нашёлся / кто-то ищет игру
         try:
-            await ctx.bot.send_message(int(uid), i18n.t("chess_seek", lang, who=who), reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton(i18n.t("chess_seek_btn", lang), web_app=WebAppInfo(url))]]))
+            await ctx.bot.send_message(int(uid), i18n.t("chess_found" if found else "chess_seek", lang, who=who),
+                                       reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(
+                                           i18n.t("chess_found_btn" if found else "chess_seek_btn", lang),
+                                           web_app=WebAppInfo(url))]]))
         except Forbidden:
             _mark_blocked(uid, True)
         except Exception:  # noqa: BLE001
