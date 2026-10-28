@@ -20,12 +20,6 @@
                 radial-gradient(500px 260px at -10% 0, rgba(61,139,255,.10), transparent 70%), var(--bg);
     background-attachment: fixed;
   }
-  /* вкладки «Где пара / Игры» — как в index.html */
-  .tabs { display: flex; gap: 4px; padding: 4px; margin: 0 0 14px; border-radius: 14px; background: var(--surface-2);
-          border: 1px solid var(--line); }
-  .tabs a { flex: 1; text-align: center; padding: 8px 6px; border-radius: 10px; color: var(--muted);
-            text-decoration: none; font-weight: 700; font-size: 14px; }
-  .tabs a.on { background: #fff; color: #000; }
   h1 { margin: 2px 2px 14px; font-size: 30px; font-weight: 800; letter-spacing: -.03em; }
   .card { background: linear-gradient(180deg, rgba(255,255,255,.045), rgba(255,255,255,.015));
           border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; margin-bottom: 12px; }
@@ -137,8 +131,6 @@
 </style>
 </head>
 <body>
-<div class="tabs"><a id="tab-where" href="index.html">📍 <span id="t-where">Где пара</span></a>
-  <a class="on" href="#">🎮 <span id="t-games">Игры</span></a></div>
 <div id="app"></div>
 <div class="err" id="err"></div>
 
@@ -155,15 +147,11 @@ const API = (params.get("api") || "https://153-76-167-68.sslip.io").replace(/\/$
 // имя бота — для ссылки-приглашения; бот передаёт его в адресе, запоминаем на случай перехода по вкладкам
 let BOT = params.get("bot") || "";
 try { if (BOT) sessionStorage.setItem("bot", BOT); else BOT = sessionStorage.getItem("bot") || ""; } catch (e) {}
-// вкладка «Где пара» — назад к расписанию, с которого пришли (там в адресе пары)
-try { const back = sessionStorage.getItem("where"); if (back) document.getElementById("tab-where").href = back; } catch (e) {}
-document.getElementById("t-where").textContent = L3("Где пара", "My class", "Mon cours");
-document.getElementById("t-games").textContent = L3("Игры", "Games", "Jeux");
 
 const T = {
   title: L3("Мини-игры", "Mini games", "Mini-jeux"),
   chess: L3("Шахматы", "Chess", "Échecs"),
-  chessSub: L3("Сыграйте со студентами вуза", "Play with students of the university", "Jouez avec les étudiants"),
+  chessSub: L3("Сыграйте с другими игроками", "Play with other players", "Jouez avec d'autres joueurs"),
   search: L3("🔍 Найти соперника", "🔍 Find an opponent", "🔍 Trouver un adversaire"),
   seeking: n => n ? L3(`<i></i>Сейчас ищут игру: <b>${n}</b>`, `<i></i>Looking for a game now: <b>${n}</b>`,
                       `<i></i>Cherchent une partie : <b>${n}</b>`)
@@ -190,10 +178,9 @@ const T = {
                 "Quitter la partie plus de 3 minutes compte comme une défaite"),
   rating: L3("Рейтинг", "Rating", "Classement"), wins: L3("побед", "wins", "victoires"),
   losses: L3("поражений", "losses", "défaites"), draws: L3("ничьих", "draws", "nuls"),
-  my: L3("Мои партии", "My games", "Mes parties"), top: L3("Рейтинг вуза", "University ranking", "Classement de l'université"),
+  my: L3("Мои партии", "My games", "Mes parties"), top: L3("Рейтинг игроков", "Player ranking", "Classement des joueurs"),
   topEmpty: L3("Пока никто не доиграл ни одной партии — будьте первым!", "No finished games yet — be the first!",
                "Aucune partie terminée — soyez le premier !"),
-  noFac: L3("факультет не выбран", "faculty not chosen", "faculté non choisie"),
   searching: L3("Ищем соперника…", "Looking for an opponent…", "Recherche d'un adversaire…"),
   searchingSub: L3("Как только кто-то тоже нажмёт «Найти соперника», партия начнётся", "The game starts as soon as someone else searches too",
                    "La partie commence dès qu'un autre joueur cherche aussi"),
@@ -293,7 +280,7 @@ async function loadLobby() {
 
 // ---- лобби
 function playerLine(p) {
-  return `${esc(p.name)}<small>${esc(p.faculty || T.noFac)}</small>`;
+  return `${esc(p.name)}${p.faculty ? `<small>${esc(p.faculty)}</small>` : ""}`;
 }
 function lobbyHTML() {
   const me = state.me || { rating: 1200, wins: 0, losses: 0, draws: 0 };
@@ -423,7 +410,7 @@ function avatar(p) {
 }
 function playerBar(p, color, turn) {
   if (!p) return `<div class="player"><div class="av">?</div><div class="who"><b>…</b></div></div>`;
-  const name = p.bot ? `<b>${esc(p.name)}</b>` : `<b>${esc(p.name)}</b><small>${esc(p.faculty || T.noFac)}</small>`;
+  const name = p.bot || !p.faculty ? `<b>${esc(p.name)}</b>` : `<b>${esc(p.name)}</b><small>${esc(p.faculty)}</small>`;
   return `<div class="player${turn ? " turn" : ""}"><div class="av ${color === "white" ? "w" : "b"}">${p.bot ? "🤖" : avatar(p)}</div>
     <div class="who">${name}${takenHTML(color)}</div>${p.bot ? "" : `<div class="rt">${p.rating}</div>`}</div>`;
 }

@@ -163,8 +163,8 @@ def curl(url: str, port: int | None = None) -> str:
     return subprocess.run(cmd, capture_output=True, text=True).stdout.strip() or "000"
 
 
-def probe_one(i: int, o: dict) -> tuple[bool, bool]:
-    """Поднимает sing-box только с этим сервером и проверяет Telegram (3 раза подряд) и сайт Губкина."""
+def probe_one(i: int, o: dict) -> bool:
+    """Поднимает sing-box только с этим сервером и проверяет Telegram (3 раза подряд)."""
     port = 21000 + i
     cfg = {"log": {"level": "error"}, "outbounds": [dict(o, tag="x")],
            "inbounds": [{"type": "mixed", "listen": "127.0.0.1", "listen_port": port}]}
@@ -174,25 +174,21 @@ def probe_one(i: int, o: dict) -> tuple[bool, bool]:
     try:
         time.sleep(1.5)
         tg = all(curl("https://api.telegram.org", port) != "000" for _ in range(3))
-        gk = curl("https://lk.gubkin.ru/schedule/", port) == "200"
     finally:
         p.terminate()
         p.wait()
         os.unlink(f.name)
-    return tg, gk
+    return tg
 
 
-def probe(outbounds: list, names: list) -> tuple[list, list, bool]:
-    """Какие серверы пускают в Telegram, какие — на сайт Губкина (и пускает ли он напрямую)."""
+def probe(outbounds: list, names: list) -> list:
+    """Какие серверы пускают в Telegram."""
     print("Проверяю серверы подписки (до пары минут)...", file=sys.stderr)
     with concurrent.futures.ThreadPoolExecutor(4) as ex:
         res = list(ex.map(probe_one, range(len(outbounds)), outbounds))
-    direct = curl("https://lk.gubkin.ru/schedule/") == "200"
-    for (tg, gk), o, name in zip(res, outbounds, names):
-        print(f"  {'✅' if tg else '❌'} Telegram  {'✅' if gk else '❌'} Губкин   {name or o['server']}",
-              file=sys.stderr)
-    print(f"  {'✅' if direct else '❌'} Губкин напрямую", file=sys.stderr)
-    return [r[0] for r in res], [r[1] for r in res], direct
+    for tg, o, name in zip(res, outbounds, names):
+        print(f"  {'✅' if tg else '❌'} Telegram   {name or o['server']}", file=sys.stderr)
+    return res
 
 
 def main():
@@ -217,26 +213,21 @@ def main():
     for i, o in enumerate(outbounds):
         o["tag"] = f"key{i + 1}"
     tags = [o["tag"] for o in outbounds]
-    tg_tags, gk_tags = tags, ["direct", *tags]
-    if "--probe" in sys.argv:  # на сервере: заранее отсеиваем серверы, которые не пускают куда нужно
-        tg_ok, gk_ok, direct = probe(outbounds, names)
+    tg_tags = tags
+    if "--probe" in sys.argv:  # на сервере: заранее отсеиваем серверы, которые не пускают в Telegram
+        tg_ok = probe(outbounds, names)
         tg_tags = [t for t, ok in zip(tags, tg_ok) if ok] or tags
-        gk_tags = (["direct"] if direct else []) + [t for t, ok in zip(tags, gk_ok) if ok] or gk_tags
         if not any(tg_ok):
             print("⚠️  Ни один сервер подписки не пустил в Telegram — оставляю все.", file=sys.stderr)
     # urltest сам проверяет серверы и ходит через тот, что отвечает быстрее
     group = {"type": "urltest", "tag": "proxy", "outbounds": tg_tags,
              "url": "https://api.telegram.org", "interval": "3m", "tolerance": 100}
-    # сайт Губкина не пускает серверы хостингов — ходим к нему тем путём, где он открывается
-    gubkin = {"type": "urltest", "tag": "gubkin", "outbounds": gk_tags,
-              "url": "https://lk.gubkin.ru/schedule/", "interval": "10m", "tolerance": 300}
-    print(f"Серверов: {len(outbounds)}, для Telegram: {len(tg_tags)}, для сайта Губкина: {len(gk_tags)}",
-          file=sys.stderr)
+    print(f"Серверов: {len(outbounds)}, для Telegram: {len(tg_tags)}", file=sys.stderr)
     config = {
         "log": {"level": "warn"},
         "inbounds": [{"type": "mixed", "tag": "in", "listen": "127.0.0.1", "listen_port": LISTEN_PORT}],
-        "outbounds": [group, gubkin, *outbounds, {"type": "direct", "tag": "direct"}],
-        "route": {"rules": [{"domain_suffix": ["gubkin.ru"], "outbound": "gubkin"}], "final": "proxy"},
+        "outbounds": [group, *outbounds, {"type": "direct", "tag": "direct"}],
+        "route": {"final": "proxy"},
     }
     print(json.dumps(config, ensure_ascii=False, indent=2))
 

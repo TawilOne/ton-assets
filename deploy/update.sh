@@ -14,8 +14,13 @@ D=/etc/systemd/system/gubkin-bot.service.d
 # VPN-прокси нужен, только если бот не работает напрямую и не через пересыльщик (relay.sh)
 if [ -s /etc/gubkin-bot/vpnkey ] && [ ! -e "$D/direct.conf" ] && [ ! -e "$D/relay.conf" ]; then
   systemctl enable -q --now gubkin-reproxy.timer
-  bash "$DIR/deploy/reproxy.sh"   # заново проверить серверы подписки
+  bash "$DIR/deploy/reproxy.sh"   # заново проверить серверы подписки (настройка — только для Telegram)
+else  # прокси не нужен — выключаем, чтобы не крутилась старая настройка
+  systemctl disable -q --now gubkin-proxy gubkin-reproxy.timer 2>/dev/null || true
 fi
+# расписание и всё, что когда-то скачивалось с сайта университета, на сервере не храним
+rm -f "$DIR"/gubkin_schedule_bot/{cache.json,cache.json.tmp,groups.json,group.json,user_groups.json,cookies.json} \
+      "$DIR"/gubkin_schedule_bot/{subscribers.json,changes_seen.json,sync_status.json,captcha.png,admin_stats.json}
 systemctl restart gubkin-bot
 # сервер мини-игр — если включён (deploy/games.sh)
 if systemctl is-enabled -q gubkin-games 2>/dev/null; then

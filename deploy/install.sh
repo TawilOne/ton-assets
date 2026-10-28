@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Установка бота расписания на сервер (Ubuntu/Debian). Запуск от root:
+# Установка бота мини-игр на сервер (Ubuntu/Debian). Запуск от root:
 #   curl -fsSL https://raw.githubusercontent.com/TawilOne/ton-assets/claude/rgu-gubkina-schedule-bot-snqhke/deploy/install.sh | bash
 # Повторный запуск безопасен: уже введённые токен и ключ не спрашиваются.
 set -euo pipefail
@@ -102,8 +102,6 @@ if [ "$DIRECT" = 0 ]; then
     echo "Telegram через прокси доступен (код $code)."
   fi
 fi
-gk=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 https://lk.gubkin.ru/schedule/ || true)
-echo "Сайт Губкина напрямую: код $gk (200 — хорошо, 000 — не открывается)"
 systemctl restart gubkin-bot
 sleep 5
 systemctl --no-pager --lines=8 status gubkin-bot || true

@@ -4,7 +4,6 @@
 
 Кто играет, сервер узнаёт по подписи Telegram (initData мини-приложения, проверяется токеном бота) —
 подделать чужое имя или рейтинг нельзя. Ходы проверяет python-chess: незаконный ход не пройдёт.
-Факультет игрока берётся из группы, которую он выбрал в боте (user_groups.json, groups.json рядом).
 Партии и рейтинг — в games.db (SQLite).
 """
 from __future__ import annotations
@@ -30,8 +29,6 @@ import chess
 import chess.engine
 from aiohttp import web
 
-from faculties import FACULTIES
-
 HERE = pathlib.Path(__file__).resolve().parent
 DB_FILE = HERE / "games.db"
 # откуда открывается мини-приложение (GitHub Pages); для проверки на своём компьютере — GAMES_ORIGINS
@@ -45,7 +42,6 @@ WAIT_MAX = 86400           # приглашение и поиск соперни
 NOTIFY_QUIET = (23, 7)     # ночью (по Москве) не будим
 NOTIFY_SAME = 10 * 60      # про одного и того же ищущего — не чаще раза в 10 минут (жмёт «Найти»/«Отменить» по кругу)
 MSK = ZoneInfo("Europe/Moscow")
-CANTEEN_WINDOW = 20 * 60   # загруженность столовой — по отметкам за последние 20 минут
 START_RATING, K = 1200, 32
 BOT = 0  # «игрок» бот: id 0 в партии; партии с ботом не трогают ни рейтинг, ни статистику
 # уровни бота: (название, Skill Level Stockfish 0–20, время на ход, доля случайных ходов)
@@ -107,17 +103,8 @@ def short_name(user: dict) -> str:
 
 
 def faculty_of(uid: int) -> str:
-    """Факультет по группе, выбранной в боте; пусто — группа не выбрана."""
-    try:
-        chosen = json.loads((HERE / "user_groups.json").read_text(encoding="utf-8"))
-        code = chosen.get(str(uid))
-        if not code:
-            return ""
-        facs = json.loads((HERE / "groups.json").read_text(encoding="utf-8")).get("faculties") or []
-    except (OSError, ValueError, AttributeError):
-        return ""
-    key = next((f.get("key") for f in facs for g in f.get("groups") or [] if g.get("code") == code), None)
-    return next((f["ru"] for f in FACULTIES if f["key"] == key), "")
+    """Факультет больше не показываем: он брался из списка групп с сайта университета, а сайт мы не трогаем."""
+    return ""
 
 
 class GameError(Exception):
@@ -140,7 +127,7 @@ class Store:
                 reason TEXT DEFAULT '', draw_offer INTEGER DEFAULT 0, created REAL, updated REAL);
             CREATE INDEX IF NOT EXISTS games_status ON games(status, kind);
             CREATE TABLE IF NOT EXISTS outbox (gid TEXT, uid INTEGER, created REAL);  -- уведомления для бота
-            CREATE TABLE IF NOT EXISTS canteen (uid INTEGER PRIMARY KEY, level INTEGER, at REAL);  -- 0 🟢 1 🟡 2 🔴
+            DROP TABLE IF EXISTS canteen;  -- столовой больше нет
             CREATE TABLE IF NOT EXISTS notified (uid INTEGER, searcher INTEGER, at REAL, PRIMARY KEY (uid, searcher));
         """)
         for table, column in (("games", "level INTEGER DEFAULT 0"),  # уровень бота
@@ -230,31 +217,6 @@ class Store:
             out.append({"uid": r["uid"], "gid": r["gid"], "kind": kind,
                         "name": who.get("name", ""), "faculty": who.get("faculty", "")})
         return out
-
-    # ---- загруженность столовой: студенты отмечают 🟢🟡🔴, показываем среднее одним значком
-
-    def canteen_vote(self, uid: int, level: int) -> None:
-        if level not in (0, 1, 2):
-            raise GameError("Непонятная отметка")
-        # у каждого одна отметка — последняя: сколько ни жми, перевес не набьёшь
-        self.db.execute("INSERT OR REPLACE INTO canteen (uid, level, at) VALUES (?, ?, ?)", (uid, level, time.time()))
-        self.db.commit()
-
-    def canteen(self, uid: int) -> dict:
-        """level: 0 🟢 / 1 🟡 / 2 🔴 / None — никто не отмечал. Среднее с весами: свежая отметка весит 1,
-        двадцатиминутная — почти 0 (очередь быстро меняется)."""
-        now = time.time()
-        self.db.execute("DELETE FROM canteen WHERE at < ?", (now - CANTEEN_WINDOW,))
-        self.db.commit()
-        rows = self.db.execute("SELECT uid, level, at FROM canteen").fetchall()
-        weights = [(r["level"], max(0.05, 1 - (now - r["at"]) / CANTEEN_WINDOW)) for r in rows]
-        total = sum(w for _, w in weights)
-        avg = sum(v * w for v, w in weights) / total if total else None
-        mine = next((r["level"] for r in rows if r["uid"] == uid), None)
-        last = max((r["at"] for r in rows), default=None)
-        return {"level": None if avg is None else 0 if avg < 2 / 3 else 1 if avg < 4 / 3 else 2,
-                "votes": len(rows), "mine": mine, "window": CANTEEN_WINDOW // 60,
-                "last": None if last is None else max(0, int(now - last))}  # сколько секунд назад последняя отметка
 
     # ---- партии
 
@@ -635,7 +597,7 @@ def make_app(store: Store, token: str, engine: Engine | None = None) -> web.Appl
 
     def who(request, present: bool = True) -> int:
         """Кто спрашивает (по подписи Telegram). present — человек сейчас в играх: это «на месте» для поиска
-        соперника и правила ухода. Столовая и статистика спрашивают с вкладки «Где пара» — там present=False."""
+        соперника и правила ухода. Статистика для администратора — present=False."""
         user = check_init_data(request.headers.get("X-Init-Data", ""), token)
         if not user:
             raise NotSigned
@@ -676,16 +638,6 @@ def make_app(store: Store, token: str, engine: Engine | None = None) -> web.Appl
         except OSError:
             return web.json_response({"error": "Статистики пока нет — отправьте боту /users"}, status=404)
         return web.Response(text=data, content_type="application/json", headers={"Cache-Control": "no-store"})
-
-    async def canteen(request):  # GET — что сейчас в столовой; POST {"level": 0|1|2} — моя отметка
-        uid = who(request, present=False)
-        if request.method == "POST":
-            try:
-                level = int((await body(request)).get("level"))
-            except (TypeError, ValueError):
-                raise GameError("Непонятная отметка") from None
-            store.canteen_vote(uid, level)
-        return web.json_response(store.canteen(uid))
 
     async def top(request):
         who(request)
@@ -737,8 +689,6 @@ def make_app(store: Store, token: str, engine: Engine | None = None) -> web.Appl
     app.router.add_get("/api/me", me)
     app.router.add_get("/api/top", top)
     app.router.add_get("/api/admin", admin_stats)
-    app.router.add_get("/api/canteen", canteen)
-    app.router.add_post("/api/canteen", canteen)
     app.router.add_get("/api/searching", searching)
     app.router.add_get("/api/game", game)
     app.router.add_post("/api/new", new)

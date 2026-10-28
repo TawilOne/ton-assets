@@ -1,7 +1,7 @@
 @echo off
 rem Everything is inside ( ) so cmd reads it before git pull can rewrite this file.
 cd /d "%~dp0"
-title Gubkin schedule bot
+title Mini games bot
 (
   echo Updating the bot ^(git pull^)...
   git pull -q

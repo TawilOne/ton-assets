@@ -26,10 +26,6 @@ def init_data(uid, first="Иван", last="Петров", token=TOKEN, auth=None
 @pytest.fixture
 def store(tmp_path, monkeypatch):
     monkeypatch.setattr(games, "HERE", tmp_path)
-    (tmp_path / "user_groups.json").write_text(json.dumps({"1": "ГМ-26-11", "2": "АА-26-01"}), encoding="utf-8")
-    (tmp_path / "groups.json").write_text(json.dumps({"faculties": [
-        {"key": "geo", "groups": [{"id": "1", "code": "ГМ-26-11"}]},
-        {"key": "aivt", "groups": [{"id": "2", "code": "АА-26-01"}]}]}), encoding="utf-8")
     s = games.Store(tmp_path / "g.db")
     for uid, first in ((1, "Иван"), (2, "Мария"), (3, "Олег")):
         s.touch({"id": uid, "first_name": first, "last_name": "Тестов"})
@@ -46,7 +42,7 @@ def test_init_data_signature():
     assert games.check_init_data("", TOKEN) is None
 
 
-def test_search_pairs_two_players_and_faculty_is_shown(store):
+def test_search_pairs_two_players(store):
     a = store.create(1, "search")
     assert store.view(1, a)["status"] == "wait"
     assert store.create(1, "search") == a  # повторный поиск — тот же
@@ -55,7 +51,7 @@ def test_search_pairs_two_players_and_faculty_is_shown(store):
     v = store.view(1, a)
     assert v["status"] == "play" and {v["white"]["id"], v["black"]["id"]} == {1, 2}
     them = v["black"] if v["you"] == "white" else v["white"]
-    assert them["faculty"] == "💻 Автоматики и ВТ" and them["name"] == "Мария Т."
+    assert them["faculty"] == "" and them["name"] == "Мария Т."  # факультет больше не показываем
 
 
 def test_invite_only_by_link(store):
@@ -139,7 +135,7 @@ def test_http_api(store):
             r = await client.post("/api/act", json={"id": gid, "action": "move", "uci": "e2e4"}, headers=first)
             assert r.status == 400 and "соперника" in (await r.json())["error"]
             me = await (await client.get("/api/me", headers=h1)).json()
-            assert me["me"]["faculty"] == "⛏ Геологии и геофизики" and [g["id"] for g in me["games"]] == [gid]
+            assert me["me"]["faculty"] == "" and [g["id"] for g in me["games"]] == [gid]
             assert me["searching"] == 0
             await client.post("/api/new", json={"kind": "search"}, headers=h2)
             assert (await (await client.get("/api/searching", headers=h1)).json()) == {"searching": 1}
@@ -344,7 +340,7 @@ def test_notify_when_someone_searches(store, monkeypatch):
     gid = store.create(1, "search")
     out = store.take_outbox()
     assert [(n["uid"], n["gid"]) for n in out] == [(2, gid)]
-    assert out[0]["name"].startswith("И") and out[0]["faculty"] == "⛏ Геологии и геофизики"
+    assert out[0]["name"].startswith("И") and out[0]["faculty"] == ""
     assert store.take_outbox() == []  # забрали — больше не отдаём
 
     store.cancel(1, gid)
@@ -408,76 +404,6 @@ def test_admin_stats_only_for_admin(store, tmp_path, monkeypatch):
             assert r.status == 200 and (await r.json())["u"] == [["Иван"]]
             assert (await client.get("/api/admin", headers=other)).status == 403
             assert (await client.get("/api/admin")).status == 401
-        finally:
-            await client.close()
-    asyncio.run(go())
-
-
-def test_canteen_average(store, monkeypatch):
-    """Загруженность столовой: каждый отмечает 🟢🟡🔴, показываем среднее одним значком.
-    У человека одна отметка (последняя), старые (больше 20 минут) забываются, свежие весят больше."""
-    now = [time.time()]
-    monkeypatch.setattr(games.time, "time", lambda: now[0])
-    assert store.canteen(1) == {"level": None, "votes": 0, "mine": None, "window": 20, "last": None}  # никто не отмечал
-    store.canteen_vote(1, 2)
-    now[0] += 90
-    assert store.canteen(2)["last"] == 90  # последняя отметка — полторы минуты назад
-    assert store.canteen(2)["level"] == 2 and store.canteen(1)["mine"] == 2
-    for _ in range(10):
-        store.canteen_vote(1, 2)  # жмёт 🔴 много раз — всё равно одна отметка
-    store.canteen_vote(2, 0)
-    store.canteen_vote(3, 0)
-    v = store.canteen(1)
-    assert v["votes"] == 3 and v["level"] == 1  # 🔴🟢🟢 → среднее 0.67 → 🟡
-    store.canteen_vote(3, 1)
-    assert store.canteen(1)["level"] == 1  # 🔴🟢🟡 → 🟡
-    now[0] += 15 * 60
-    store.canteen_vote(4, 0)
-    store.canteen_vote(5, 0)
-    assert store.canteen(1)["level"] == 0  # две свежие 🟢 перевешивают старые отметки
-    now[0] += 10 * 60
-    v = store.canteen(1)
-    assert v["votes"] == 2 and v["mine"] is None and v["level"] == 0  # отметкам 25 минут — забыты
-    now[0] += 30 * 60
-    assert store.canteen(1)["level"] is None
-    with pytest.raises(games.GameError):
-        store.canteen_vote(1, 5)
-
-
-def test_http_canteen(store):
-    async def go():
-        client = TestClient(TestServer(games.make_app(store, TOKEN)))
-        await client.start_server()
-        try:
-            h = {"X-Init-Data": init_data(1)}
-            assert (await (await client.get("/api/canteen", headers=h)).json())["level"] is None
-            r = await client.post("/api/canteen", json={"level": 1}, headers=h)
-            assert (await r.json())["level"] == 1 and (await r.json())["mine"] == 1
-            assert (await client.post("/api/canteen", json={"level": "x"}, headers=h)).status == 400
-            assert (await client.get("/api/canteen")).status == 401
-        finally:
-            await client.close()
-    asyncio.run(go())
-
-
-def test_canteen_does_not_count_as_being_in_games(store, monkeypatch):
-    """Нажал «Найти соперника» и ушёл на вкладку «Где пара»: карточка столовой спрашивает сервер,
-    но к нему не подсаживают соперника (иначе через 3 минуты — поражение за уход)."""
-    now = [time.time()]
-    monkeypatch.setattr(games.time, "time", lambda: now[0])
-
-    async def go():
-        client = TestClient(TestServer(games.make_app(store, TOKEN)))
-        await client.start_server()
-        try:
-            h1 = {"X-Init-Data": init_data(1, auth=now[0])}
-            gid = (await (await client.post("/api/new", json={"kind": "search"}, headers=h1)).json())["id"]
-            now[0] += 60  # ушёл на «Где пара»: там опрос столовой
-            assert (await client.get("/api/canteen", headers=h1)).status == 200
-            await client.post("/api/canteen", json={"level": 1}, headers=h1)
-            h2 = {"X-Init-Data": init_data(2, first="Мария", auth=now[0])}
-            v = await (await client.post("/api/new", json={"kind": "search"}, headers=h2)).json()
-            assert v["id"] != gid and v["status"] == "wait"  # Марию к Ивану не посадили
         finally:
             await client.close()
     asyncio.run(go())
