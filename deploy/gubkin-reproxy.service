@@ -1,6 +1,0 @@
-[Unit]
-Description=Gubkin bot: re-check VPN servers and rebuild proxy config
-
-[Service]
-Type=oneshot
-ExecStart=/bin/bash /opt/gubkin-bot/deploy/reproxy.sh

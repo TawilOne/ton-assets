@@ -1,3 +1,0 @@
-python-telegram-bot[job-queue,socks]>=21,<23
-aiohttp>=3.9
-chess>=1.10,<1.11  # 1.10 — готовый wheel, без сборки на сервере
