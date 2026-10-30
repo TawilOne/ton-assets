@@ -22,6 +22,26 @@ docker compose up -d --build
 - **Админка** (`/admin`): создание и редактирование заданий, загрузка файлов, поле «Адрес / IP» для машин, скрытие заданий.
 - Флаги хранятся как SHA-256, есть CSRF-защита и лимит 10 попыток в минуту.
 
+## Запуск на сервере (с доменом и HTTPS)
+
+1. Арендуй VPS с Ubuntu 22.04/24.04: хватит 1 CPU и 1 ГБ RAM.
+2. У регистратора домена создай A-запись `ctf.твойдомен.ru`, которая указывает на IP сервера.
+3. На сервере:
+
+```bash
+curl -fsSL https://get.docker.com | sh
+git clone -b claude/dazzling-hamilton-3sy4td https://github.com/TawilOne/ton-assets.git
+cd ton-assets/ctf-platform
+cp .env.example .env && nano .env      # ADMIN_PASSWORD, DOMAIN, ACME_EMAIL
+docker compose -f docker-compose.prod.yml up -d --build
+```
+
+Caddy сам получит HTTPS-сертификат Let's Encrypt, и сайт откроется по `https://<DOMAIN>`.
+Порты 80 и 443 должны быть открыты (`ufw allow 22,80,443/tcp && ufw enable`).
+
+Обновление: `git pull && docker compose -f docker-compose.prod.yml up -d --build`.
+Логи: `docker compose -f docker-compose.prod.yml logs -f`.
+
 ## Свои задания и машины
 
 В админке нажми «Новое задание», выбери категорию, впиши описание и флаг, при необходимости приложи файл.
@@ -36,4 +56,3 @@ docker compose up -d --build
 ## Важно
 
 Встроенные лабы `/lab/*` уязвимы намеренно, но безопасны для сервера: в них нет RCE и доступа к файлам.
-Для публичного запуска поставь перед платформой HTTPS (nginx или Caddy).

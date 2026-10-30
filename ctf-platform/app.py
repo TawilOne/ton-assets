@@ -38,6 +38,7 @@ SECRET = _secret_path.read_bytes()
 app = Flask(__name__)
 app.secret_key = SECRET
 app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax",
+                  SESSION_COOKIE_SECURE=os.getenv("SESSION_COOKIE_SECURE") == "1",
                   MAX_CONTENT_LENGTH=32 * 1024 * 1024)
 
 DIFFICULTIES = {"easy": "Легко", "medium": "Средне", "hard": "Сложно"}
