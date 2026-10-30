@@ -1,0 +1,47 @@
+{% extends "base.html" %}{% block title %}{{ ch.title }}{% endblock %}
+{% block content %}
+<div class="crumbs"><a class="back" href="{{ url_for('category', slug=ch.cat_slug) }}">‹</a><a href="{{ url_for('index') }}#categories">Категории</a> / <a href="{{ url_for('category', slug=ch.cat_slug) }}">{{ ch.cat_name }}</a> / <span>{{ ch.title }}</span></div>
+
+<div class="card blood">
+  <div class="icon-box red">{{ icon('drop', 24) }}</div>
+  <div><span class="mono label">Первая кровь</span>
+    {% if solvers %}<b><a href="{{ url_for('profile', username=solvers[0].username) }}">{{ solvers[0].username }}</a></b> <span class="mono muted">{{ solvers[0].created_at[:16] }}</span>
+    {% else %}<b class="muted">Пока никто — забери её!</b>{% endif %}
+  </div>
+</div>
+
+<article class="card">
+  <div class="head">
+    <div class="icon-box big">{{ icon(ch.icon, 32) }}</div>
+    <div>
+      <h1>{{ ch.title }}{% if not ch.visible %} <span class="badge">скрыто</span>{% endif %}</h1>
+      <span class="badge {{ ch.difficulty }}">● {{ DIFF[ch.difficulty] }}</span>
+      <span class="mono accent">{{ ch.points }} очков</span>
+      {% if solved %}<span class="badge easy">✓ Решено</span>{% endif %}
+    </div>
+  </div>
+  <div class="desc">{{ ch.description }}</div>
+  {% if address %}
+  <div class="kv"><span class="mono">Адрес</span><a class="mono" href="{{ address }}" target="_blank" rel="noopener">{{ address }}</a></div>
+  {% endif %}
+  {% if ch.attachment %}
+  <a class="btn" href="{{ url_for('files', name=ch.attachment) }}">{{ icon('download', 18) }}Скачать {{ ch.attachment }}</a>
+  {% endif %}
+
+  {% if user %}
+  <form method="post" class="flag-form">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input name="flag" placeholder="FLAG{...}" autocomplete="off" required class="mono">
+    <button class="btn primary">{{ icon('flag', 18) }}Сдать</button>
+  </form>
+  {% else %}
+  <p class="muted"><a href="{{ url_for('login', next=request.path) }}">Войди</a>, чтобы сдать флаг.</p>
+  {% endif %}
+</article>
+
+<h2>Решили ({{ solvers|length }})</h2>
+<div class="card list">
+  {% for s in solvers %}<div class="row"><span class="mono rank">#{{ loop.index }}</span><a href="{{ url_for('profile', username=s.username) }}">{{ s.username }}</a><span class="mono muted small">{{ s.created_at[:16] }}</span></div>
+  {% else %}<p class="muted">Ещё никто.</p>{% endfor %}
+</div>
+{% endblock %}

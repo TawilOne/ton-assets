@@ -1,0 +1,45 @@
+{% extends "base.html" %}{% block title %}Главная{% endblock %}
+{% block content %}
+<section class="hero">
+  <div>
+    <p class="mono muted">$ ./start --mode=learn</p>
+    <h1>Учись взламывать <span class="accent">легально</span></h1>
+    <p class="muted">Задания по вебу, криптографии, стеганографии, форензике и реверсу. Находи флаг, сдавай его и поднимайся в рейтинге.</p>
+    {% if not user %}<a class="btn primary" href="{{ url_for('register') }}">Начать</a>{% endif %}
+  </div>
+  <div class="stats">
+    <div><b>{{ stats.challenges }}</b><span>заданий</span></div>
+    <div><b>{{ stats.users }}</b><span>игроков</span></div>
+    <div><b>{{ stats.solves }}</b><span>решений</span></div>
+  </div>
+</section>
+
+<h2 id="categories">Категории</h2>
+<div class="grid">
+  {% for c in cats %}
+  <a class="card cat" href="{{ url_for('category', slug=c.slug) }}">
+    <div class="icon-box">{{ icon(c.icon, 26) }}</div>
+    <div><h3>{{ c.name }}</h3><p class="muted">{{ c.description }}</p><span class="mono small">{{ c.total|plural('задание', 'задания', 'заданий') }}</span></div>
+  </a>
+  {% endfor %}
+</div>
+
+<div class="two-col">
+  <section>
+    <h2>Последние решения</h2>
+    <div class="card list">
+      {% for r in recent %}
+        <div class="row"><a href="{{ url_for('profile', username=r.username) }}">{{ r.username }}</a> решил <a href="{{ url_for('challenge', slug=r.slug) }}">{{ r.title }}</a><span class="mono muted small">{{ r.created_at[5:16] }}</span></div>
+      {% else %}<p class="muted">Пока никто ничего не решил. Будь первым!</p>{% endfor %}
+    </div>
+  </section>
+  <section>
+    <h2>Топ-5</h2>
+    <div class="card list">
+      {% for r in top %}
+        <div class="row"><span class="mono rank">#{{ loop.index }}</span><a href="{{ url_for('profile', username=r.username) }}">{{ r.username }}</a><span class="mono accent">{{ r.score }}</span></div>
+      {% else %}<p class="muted">Рейтинг пуст.</p>{% endfor %}
+    </div>
+  </section>
+</div>
+{% endblock %}
