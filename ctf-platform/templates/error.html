@@ -1,4 +1,0 @@
-{% extends "base.html" %}{% block title %}{{ code }}{% endblock %}
-{% block content %}
-<div class="card auth"><h1 class="mono">{{ code }}</h1><p class="muted">{{ 'Нет доступа.' if code == 403 else 'Такой страницы нет. Но ты молодец, что проверил.' }}</p><a class="btn" href="{{ url_for('index') }}">На главную</a></div>
-{% endblock %}
